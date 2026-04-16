@@ -1,0 +1,5 @@
+controller: rl
+max_steps: null
+seed: null
+num_repeats: 3
+task_name: pmsm_current_control

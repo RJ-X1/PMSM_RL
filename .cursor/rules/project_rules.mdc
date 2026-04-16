@@ -1,0 +1,34 @@
+# PMSM RL Project Rules
+
+## Project goal
+Build a Python simulation project for reinforcement learning current control of a PMSM.
+Use gym-electric-motor as the physical environment layer when possible.
+Focus on modular, readable, research-friendly code.
+
+## Code style
+- Use Python 3.10+
+- Prefer small modules with clear responsibilities
+- Add docstrings to public classes and functions
+- Use type hints when practical
+- Avoid giant single-file implementations
+- Keep training, evaluation, plotting, and environment construction separated
+
+## Project architecture
+- envs/: GEM environment creation and wrappers
+- agents/: RL algorithms and neural networks
+- baselines/: PI current controller baseline
+- configs/: experiment and environment configs
+- utils/: logging, checkpointing, metrics
+- outputs/: generated results only
+
+## Engineering constraints
+- Do not invent unavailable APIs
+- If gym-electric-motor API is uncertain, first inspect installed package or current codebase
+- Always explain which files will be created or modified before large edits
+- Prefer incremental implementation over full rewrite
+- After editing, suggest terminal commands to test the changed code
+
+## Research constraints
+- The first target is single PMSM current control in Python simulation
+- Start with a minimal runnable version
+- Prioritize current tracking, limit handling, logging, and reproducibility

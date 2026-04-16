@@ -1,0 +1,8 @@
+# gym-electric-motor PMSM continuous current control (dq / continuous converter; id varies by GEM version).
+# v3 registry uses Cont-CC-PMSM-v0; older docs may list DqCont-CC-PMSM-v0.
+env_id: Cont-CC-PMSM-v0
+seed: 0
+
+# Passed to gem.make(env_id, **gem_kwargs). Use null visualization to avoid GUI.
+gem_kwargs:
+  visualization: null
