@@ -12,13 +12,26 @@ Otherwise it falls back to conservative heuristics.
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 import numpy as np
 
 TRACE_SIGNAL_NAMES = ("i_d", "ref_i_d", "i_q", "ref_i_q", "epsilon")
 TRACE_ACTION_NAMES = ("act_u_a", "act_u_b", "act_u_c")
+CUSTOM_OBSERVATION_NAMES = (
+    "i_d",
+    "i_q",
+    "omega_m",
+    "ref_i_d",
+    "ref_i_q",
+    "e_d",
+    "e_q",
+    "prev_u_d",
+    "prev_u_q",
+    "T_L",
+)
+CUSTOM_ACTION_NAMES = ("act_u_d", "act_u_q")
 
 ABC_STATE_NAMES = [
     "omega",
@@ -53,10 +66,11 @@ class ObservationSpec:
     state_names: list[str]
     reference_names: list[str]
     action_names: list[str]
+    extra_names: list[str] = field(default_factory=list)
 
     @property
     def signal_names(self) -> list[str]:
-        return [*self.state_names, *self.reference_names]
+        return [*self.state_names, *self.reference_names, *self.extra_names]
 
     @property
     def obs_dim(self) -> int:
@@ -187,6 +201,31 @@ def introspect_env(env: Any) -> EnvIntrospection:
     return EnvIntrospection(state_names=state_names, reference_names=reference_names)
 
 
+def _is_custom_pmsm_env(*, env_id: str, obs_dim: int, act_dim: int, env: Any | None = None) -> bool:
+    obj = getattr(env, "unwrapped", env)
+    if bool(getattr(obj, "is_custom_pmsm_env", False)):
+        return True
+    names = getattr(obj, "observation_names", None)
+    if names and list(names) == list(CUSTOM_OBSERVATION_NAMES):
+        return True
+    env_id_lower = str(env_id).lower()
+    return (
+        "custom-pmsm" in env_id_lower
+        or "pmsm-current" in env_id_lower
+        or ("custom" in env_id_lower and obs_dim == len(CUSTOM_OBSERVATION_NAMES) and act_dim == 2)
+    )
+
+
+def _custom_observation_spec(env_id: str) -> ObservationSpec:
+    return ObservationSpec(
+        env_id=env_id,
+        layout="custom_dq",
+        state_names=["i_d", "i_q", "omega_m"],
+        reference_names=["ref_i_d", "ref_i_q"],
+        extra_names=["e_d", "e_q", "prev_u_d", "prev_u_q", "T_L"],
+        action_names=list(CUSTOM_ACTION_NAMES),
+    )
+
 
 def _infer_layout(env_id: str, act_dim: int) -> str:
     env_id_lower = env_id.lower()
@@ -245,7 +284,7 @@ def infer_observation_spec(
     obs_dim: int,
     act_dim: int,
     env: Any | None = None,
-    ) -> ObservationSpec:
+) -> ObservationSpec:
     """Infer a semantic flat-observation spec.
 
     Preference order:
@@ -253,6 +292,9 @@ def infer_observation_spec(
     2. Known PMSM defaults from GEM literature.
     3. Generic fallback names.
     """
+
+    if _is_custom_pmsm_env(env_id=env_id, obs_dim=obs_dim, act_dim=act_dim, env=env):
+        return _custom_observation_spec(env_id)
 
     layout = _infer_layout(env_id=env_id, act_dim=act_dim)
     introspection = introspect_env(env) if env is not None else EnvIntrospection()
@@ -328,8 +370,10 @@ def resolve_signal_indices(
     return OrderedDict((name, int(signal_to_idx[name])) for name in required_names)
 
 
-def required_eval_trace_columns() -> tuple[str, ...]:
+def required_eval_trace_columns(layout: str | None = None) -> tuple[str, ...]:
     """Return the standard trace columns expected in PMSM eval CSVs."""
+    if layout == "custom_dq":
+        return ("i_d", "ref_i_d", "i_q", "ref_i_q")
     return (*TRACE_SIGNAL_NAMES, *TRACE_ACTION_NAMES)
 
 

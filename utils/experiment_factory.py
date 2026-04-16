@@ -19,9 +19,15 @@ DEFAULT_TASK_NAME = "pmsm_current_control"
 def make_env_build_config(env_cfg: Any, *, seed_override: int | None = None) -> EnvBuildConfig:
     """Convert parsed env config into an EnvBuildConfig."""
     seed = int(seed_override if seed_override is not None else env_cfg.seed)
+    use_custom_env = bool(getattr(env_cfg, "use_custom_env", False))
+    custom_env_kwargs = {}
+    if use_custom_env and hasattr(env_cfg, "to_custom_env_kwargs"):
+        custom_env_kwargs = dict(env_cfg.to_custom_env_kwargs())
     return EnvBuildConfig(
         env_id=str(env_cfg.env_id),
         seed=seed,
+        use_custom_env=use_custom_env,
+        custom_env_kwargs=custom_env_kwargs,
         gem_kwargs=dict(env_cfg.gem_kwargs),
     )
 

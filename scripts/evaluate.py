@@ -105,7 +105,9 @@ def run_evaluation(
     spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
     signal_fieldnames = list(parse_flat_observation(obs, spec=spec).keys())
     missing_trace_columns = [
-        name for name in required_eval_trace_columns() if name not in signal_fieldnames and name not in spec.action_names
+        name
+        for name in required_eval_trace_columns(layout=spec.layout)
+        if name not in signal_fieldnames and name not in spec.action_names
     ]
     if missing_trace_columns:
         raise KeyError(f"Evaluation export is missing required trace columns: {missing_trace_columns}")

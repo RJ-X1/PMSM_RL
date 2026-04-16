@@ -20,10 +20,10 @@ from typing import Any
 
 import numpy as np
 
-from envs.make_env import EnvBuildConfig, _make_raw_gem_env, make_eval_env
+from envs.make_env import _make_raw_env, make_eval_env
 from envs.obs_parser import build_observation_spec, introspect_env, parse_flat_observation
 from utils.config import parse_env_config
-from utils.experiment_factory import DEFAULT_ENV_CONFIG_PATH
+from utils.experiment_factory import DEFAULT_ENV_CONFIG_PATH, make_env_build_config
 from utils.seed import set_seed
 
 
@@ -55,24 +55,32 @@ def main() -> None:
     env_cfg = parse_env_config(args.env_config)
     set_seed(int(env_cfg.seed))
 
-    build_cfg = EnvBuildConfig(env_id=env_cfg.env_id, seed=env_cfg.seed, gem_kwargs=dict(env_cfg.gem_kwargs))
-    raw_env = _make_raw_gem_env(build_cfg)
+    build_cfg = make_env_build_config(env_cfg)
+    raw_env = _make_raw_env(build_cfg)
     raw_obs, raw_info = raw_env.reset(seed=int(env_cfg.seed))
 
     wrapped_env = make_eval_env(build_cfg)
     flat_obs, flat_info = wrapped_env.reset(seed=int(env_cfg.seed))
 
     obs_dim = int(wrapped_env.observation_space.shape[0])
+    act_dim = int(wrapped_env.action_space.shape[0])
     spec = build_observation_spec(env_id=env_cfg.env_id, env=wrapped_env)
     env_details = introspect_env(raw_env)
     first_values = np.asarray(flat_obs).reshape(-1)[: min(12, obs_dim)].astype(float).tolist()
+    preview_action = np.zeros((act_dim,), dtype=np.float32)
+    next_obs, step_reward, terminated, truncated, step_info = wrapped_env.step(preview_action)
+    named_obs = parse_flat_observation(flat_obs, spec=spec)
+    next_named_obs = parse_flat_observation(next_obs, spec=spec)
 
     summary = {
         "env_id": env_cfg.env_id,
+        "use_custom_env": bool(getattr(env_cfg, "use_custom_env", False)),
         "raw_env_class": type(raw_env).__name__,
         "wrapped_env_class": type(wrapped_env).__name__,
         "observation_space": str(wrapped_env.observation_space),
         "action_space": str(wrapped_env.action_space),
+        "obs_dim": obs_dim,
+        "act_dim": act_dim,
         "action_low": np.asarray(wrapped_env.action_space.low).reshape(-1).astype(float).tolist(),
         "action_high": np.asarray(wrapped_env.action_space.high).reshape(-1).astype(float).tolist(),
         "reset_observation_shape": list(np.asarray(flat_obs).shape),
@@ -83,9 +91,16 @@ def main() -> None:
         "introspected_state_names": env_details.state_names,
         "introspected_reference_names": env_details.reference_names,
         "inferred_layout": spec.layout,
-        "inferred_signal_names": spec.signal_names,
-        "inferred_action_names": spec.action_names,
-        "named_observation_preview": parse_flat_observation(flat_obs, spec=spec),
+        "signal_names": spec.signal_names,
+        "action_names": spec.action_names,
+        "named_observation_preview": named_obs,
+        "step_action_preview": preview_action.astype(float).tolist(),
+        "step_reward": float(step_reward),
+        "step_terminated": bool(terminated),
+        "step_truncated": bool(truncated),
+        "step_info_keys": sorted(list(step_info.keys())),
+        "step_all_finite": bool(np.isfinite(next_obs).all() and np.isfinite(step_reward)),
+        "named_step_observation_preview": next_named_obs,
     }
 
     if args.as_json:
@@ -93,8 +108,11 @@ def main() -> None:
         return
 
     print(f"env_id: {summary['env_id']}")
+    print(f"use_custom_env: {summary['use_custom_env']}")
     print(f"raw_env_class: {summary['raw_env_class']}")
     print(f"wrapped_env_class: {summary['wrapped_env_class']}")
+    print(f"observation dim: {summary['obs_dim']}")
+    print(f"action dim: {summary['act_dim']}")
     print(f"observation_space: {summary['observation_space']}")
     print(f"action_space: {summary['action_space']}")
     print(f"reset_observation_shape: {summary['reset_observation_shape']}")
@@ -108,10 +126,19 @@ def main() -> None:
     print(f"introspected_state_names: {summary['introspected_state_names']}")
     print(f"introspected_reference_names: {summary['introspected_reference_names']}")
     print(f"inferred_layout: {summary['inferred_layout']}")
-    print(f"inferred_signal_names: {summary['inferred_signal_names']}")
-    print(f"inferred_action_names: {summary['inferred_action_names']}")
+    print(f"signal_names: {summary['signal_names']}")
+    print(f"action_names: {summary['action_names']}")
     print("named_observation_preview:")
     print(json.dumps(summary["named_observation_preview"], indent=2, ensure_ascii=False))
+    print(f"step_action_preview: {summary['step_action_preview']}")
+    print(
+        f"step_reward: {summary['step_reward']:.6f} "
+        f"terminated={summary['step_terminated']} truncated={summary['step_truncated']} "
+        f"all_finite={summary['step_all_finite']}"
+    )
+    print(f"step_info_keys: {summary['step_info_keys']}")
+    print("named_step_observation_preview:")
+    print(json.dumps(summary["named_step_observation_preview"], indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

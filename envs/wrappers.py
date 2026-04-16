@@ -13,6 +13,8 @@ class FlattenObservationWrapper(gym.ObservationWrapper):
 
     def __init__(self, env: gym.Env) -> None:
         super().__init__(env)
+        self.observation_names = list(getattr(env, "observation_names", []))
+        self.action_names = list(getattr(env, "action_names", []))
         sample_obs, _ = self.env.reset()
         flat = self._flatten(sample_obs)
 

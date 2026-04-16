@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 import gymnasium as gym
 
+from envs.pmsm_current_env import PMSMCurrentControlEnv
 from envs.wrappers import apply_common_wrappers, make_eval_wrappers, make_train_wrappers
 
 Mode = Literal["train", "eval"]
@@ -18,6 +19,8 @@ class EnvBuildConfig:
 
     env_id: str = "Cont-CC-PMSM-v0"
     seed: int | None = None
+    use_custom_env: bool = False
+    custom_env_kwargs: dict[str, Any] = field(default_factory=dict)
     gem_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -45,9 +48,23 @@ def _make_raw_gem_env(config: EnvBuildConfig) -> gym.Env:
     return gem.make(resolved, **dict(config.gem_kwargs))
 
 
+def _make_raw_custom_env(config: EnvBuildConfig) -> gym.Env:
+    """Create the lightweight custom PMSM current-control environment."""
+    kwargs = dict(config.custom_env_kwargs)
+    kwargs.setdefault("env_id", config.env_id)
+    return PMSMCurrentControlEnv(**kwargs)
+
+
+def _make_raw_env(config: EnvBuildConfig) -> gym.Env:
+    """Create either the custom PMSM env or the legacy GEM env."""
+    if bool(config.use_custom_env):
+        return _make_raw_custom_env(config)
+    return _make_raw_gem_env(config)
+
+
 def make_env(config: EnvBuildConfig, mode: Mode = "train") -> gym.Env:
     """Build wrapped environment for training or evaluation."""
-    env = _make_raw_gem_env(config)
+    env = _make_raw_env(config)
     wrappers = make_train_wrappers() if mode == "train" else make_eval_wrappers()
     env = apply_common_wrappers(env, wrappers)
     if config.seed is not None:
