@@ -17,7 +17,7 @@ import numpy as np
 
 from agents.replay_buffer import ReplayBuffer
 from envs.make_env import make_eval_env, make_train_env
-from utils.config import parse_env_config, parse_train_config
+from utils.config import apply_train_reward_override, parse_env_config, parse_train_config
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
     DEFAULT_EVAL_CONFIG_PATH,
@@ -123,6 +123,7 @@ def main() -> None:
 
     env_cfg = parse_env_config(args.env_config)
     train_cfg = parse_train_config(args.train_config)
+    env_cfg = apply_train_reward_override(env_cfg, train_cfg)
     set_seed(int(env_cfg.seed))
 
     env = make_train_env(make_env_build_config(env_cfg))

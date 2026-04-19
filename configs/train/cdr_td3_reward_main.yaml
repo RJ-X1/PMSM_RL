@@ -1,0 +1,35 @@
+algo: td3
+run_name: cdr_td3_reward_main
+output_dir: outputs
+device: cpu
+
+total_steps: 500000
+replay_capacity: 300000
+batch_size: 256
+warmup_steps: 10000
+update_after: 10000
+max_steps_per_episode: 2000
+
+gamma: 0.99
+tau: 0.005
+lr_actor: 0.0001
+lr_critic: 0.001
+hidden_dim: 256
+
+exploration_noise: 0.08
+target_policy_noise: 0.12
+target_noise_clip: 0.25
+policy_delay: 2
+
+eval_every_steps: 25000
+eval_episodes: 5
+save_every_steps: 25000
+log_every_steps: 5000
+
+reward:
+  mode: constraint_aware_reward
+  w_ed: 0.40
+  w_eq: 0.40
+  w_u: 0.08
+  w_da: 0.07
+  w_lim: 0.05

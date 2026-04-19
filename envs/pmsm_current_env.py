@@ -46,6 +46,13 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         "T_L",
     )
     ACTION_NAMES = ("act_u_d", "act_u_q")
+    REWARD_TERM_NAMES = (
+        "reward_tracking_d",
+        "reward_tracking_q",
+        "reward_voltage_effort",
+        "reward_delta_action",
+        "reward_limit_penalty",
+    )
 
     def __init__(
         self,
@@ -65,10 +72,16 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         load_torque_range: Iterable[float] = (0.0, 0.0),
         observation_noise_std: float = 0.0,
         process_noise_std: float = 0.0,
-        reward_error_weight: float = 0.40,
-        reward_voltage_weight: float = 0.08,
-        reward_delta_action_weight: float = 0.07,
-        reward_limit_weight: float = 0.05,
+        reward_mode: str = "vanilla_td3_reward",
+        reward_w_ed: float | None = None,
+        reward_w_eq: float | None = None,
+        reward_w_u: float | None = None,
+        reward_w_da: float | None = None,
+        reward_w_lim: float | None = None,
+        reward_error_weight: float | None = None,
+        reward_voltage_weight: float | None = None,
+        reward_delta_action_weight: float | None = None,
+        reward_limit_weight: float | None = None,
     ) -> None:
         super().__init__()
         self.env_id = str(env_id)
@@ -94,14 +107,24 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
 
         self.observation_noise_std = float(observation_noise_std)
         self.process_noise_std = float(process_noise_std)
-        self.reward_error_weight = float(reward_error_weight)
-        self.reward_voltage_weight = float(reward_voltage_weight)
-        self.reward_delta_action_weight = float(reward_delta_action_weight)
-        self.reward_limit_weight = float(reward_limit_weight)
+        legacy_error_weight = 0.40 if reward_error_weight is None else float(reward_error_weight)
+        self.reward_mode = str(reward_mode).strip().lower()
+        self.reward_w_ed = float(legacy_error_weight if reward_w_ed is None else reward_w_ed)
+        self.reward_w_eq = float(legacy_error_weight if reward_w_eq is None else reward_w_eq)
+        self.reward_w_u = float(0.08 if reward_voltage_weight is None and reward_w_u is None else (
+            reward_voltage_weight if reward_w_u is None else reward_w_u
+        ))
+        self.reward_w_da = float(0.07 if reward_delta_action_weight is None and reward_w_da is None else (
+            reward_delta_action_weight if reward_w_da is None else reward_w_da
+        ))
+        self.reward_w_lim = float(0.05 if reward_limit_weight is None and reward_w_lim is None else (
+            reward_limit_weight if reward_w_lim is None else reward_w_lim
+        ))
 
         self.current_limit = self.env_params.resolved_current_limit(self.motor_params)
         self.observation_names = list(self.OBSERVATION_NAMES)
         self.action_names = list(self.ACTION_NAMES)
+        self.reward_term_names = list(self.REWARD_TERM_NAMES)
 
         self.action_space = gym.spaces.Box(
             low=-1.0,
@@ -188,6 +211,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         return {
             "env_id": self.env_id,
             "done_reason": done_reason,
+            "reward_mode": self.reward_mode,
             "elapsed_steps": int(self.elapsed_steps),
             "i_d": float(self.state.i_d),
             "i_q": float(self.state.i_q),
@@ -203,6 +227,17 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "reward": float(reward),
         }
 
+    def _vanilla_limit_penalty(self, current_mag: float) -> float:
+        """Preserve the original baseline current-limit penalty behavior."""
+        return max(0.0, float(current_mag) / float(self.current_limit) - 1.0)
+
+    def _constraint_aware_limit_penalty(self) -> float:
+        """Per-axis squared current-limit penalty used by the enhanced reward mode."""
+        i_scale = max(float(self.motor_params.Imax), 1e-6)
+        i_d_penalty = max(0.0, abs(float(self.state.i_d)) / i_scale - 1.0) ** 2
+        i_q_penalty = max(0.0, abs(float(self.state.i_q)) / i_scale - 1.0) ** 2
+        return float(i_d_penalty + i_q_penalty)
+
     def _reward_terms(
         self,
         *,
@@ -214,23 +249,33 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
     ) -> tuple[float, OrderedDict[str, float]]:
         i_scale = max(float(self.motor_params.Imax), 1e-6)
         u_scale = max(float(self.motor_params.Umax), 1e-6)
-        p_lim = max(0.0, float(current_mag) / float(self.current_limit) - 1.0)
+        tracking_d = float(abs(float(e_d)) / i_scale)
+        tracking_q = float(abs(float(e_q)) / i_scale)
+        voltage_effort = float(np.dot(u_dq / u_scale, u_dq / u_scale))
+        delta_action = float(np.dot(delta_a, delta_a))
+        if self.reward_mode == "constraint_aware_reward":
+            limit_penalty = self._constraint_aware_limit_penalty()
+        elif self.reward_mode == "vanilla_td3_reward":
+            limit_penalty = self._vanilla_limit_penalty(current_mag)
+        else:
+            raise ValueError(f"Unsupported reward mode: {self.reward_mode}")
         reward = (
             1.0
-            - self.reward_error_weight * abs(float(e_d)) / i_scale
-            - self.reward_error_weight * abs(float(e_q)) / i_scale
-            - self.reward_voltage_weight * float(np.dot(u_dq / u_scale, u_dq / u_scale))
-            - self.reward_delta_action_weight * float(np.dot(delta_a, delta_a))
-            - self.reward_limit_weight * p_lim
+            - self.reward_w_ed * tracking_d
+            - self.reward_w_eq * tracking_q
+            - self.reward_w_u * voltage_effort
+            - self.reward_w_da * delta_action
+            - self.reward_w_lim * limit_penalty
         )
         terms = OrderedDict(
-            tracking_d=float(abs(float(e_d)) / i_scale),
-            tracking_q=float(abs(float(e_q)) / i_scale),
-            voltage_effort=float(np.dot(u_dq / u_scale, u_dq / u_scale)),
-            delta_action=float(np.dot(delta_a, delta_a)),
-            limit_penalty=float(p_lim),
+            reward_tracking_d=tracking_d,
+            reward_tracking_q=tracking_q,
+            reward_voltage_effort=voltage_effort,
+            reward_delta_action=delta_action,
+            reward_limit_penalty=float(limit_penalty),
         )
-        return float(reward), terms
+        safe_reward = float(np.nan_to_num(reward, nan=-1.0, posinf=-1.0, neginf=-1.0))
+        return safe_reward, terms
 
     def reset(
         self,

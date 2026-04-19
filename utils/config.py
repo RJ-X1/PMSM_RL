@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -116,6 +116,18 @@ class TerminationConfig:
 
 
 @dataclass(slots=True)
+class RewardConfig:
+    """Reward-mode settings for the custom PMSM environment."""
+
+    mode: str = "vanilla_td3_reward"
+    w_ed: float = 0.40
+    w_eq: float = 0.40
+    w_u: float = 0.08
+    w_da: float = 0.07
+    w_lim: float = 0.05
+
+
+@dataclass(slots=True)
 class EnvConfig:
     """Environment configuration supporting both GEM and custom PMSM modes."""
 
@@ -128,6 +140,7 @@ class EnvConfig:
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     noise: NoiseConfig = field(default_factory=NoiseConfig)
     termination: TerminationConfig = field(default_factory=TerminationConfig)
+    reward: RewardConfig = field(default_factory=RewardConfig)
 
     def to_custom_env_kwargs(self) -> dict[str, Any]:
         """Build kwargs for :class:`envs.pmsm_current_env.PMSMCurrentControlEnv`."""
@@ -149,6 +162,12 @@ class EnvConfig:
             "load_torque_range": tuple(self.environment.load_torque_range),
             "observation_noise_std": float(self.noise.observation_noise_std),
             "process_noise_std": float(self.noise.process_noise_std),
+            "reward_mode": str(self.reward.mode),
+            "reward_w_ed": float(self.reward.w_ed),
+            "reward_w_eq": float(self.reward.w_eq),
+            "reward_w_u": float(self.reward.w_u),
+            "reward_w_da": float(self.reward.w_da),
+            "reward_w_lim": float(self.reward.w_lim),
         }
 
 
@@ -222,6 +241,7 @@ class TrainConfig:
     log_every_steps: int = 100
     save_every_steps: int | None = None
     save_every_episodes: int | None = 25
+    reward: RewardConfig | None = None
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
@@ -329,6 +349,31 @@ def _parse_termination_config(data: dict[str, Any]) -> TerminationConfig:
     )
 
 
+def _build_reward_config(section: Mapping[str, Any], defaults: RewardConfig) -> RewardConfig:
+    return RewardConfig(
+        mode=str(section.get("mode", defaults.mode)).strip().lower(),
+        w_ed=float(section.get("w_ed", defaults.w_ed)),
+        w_eq=float(section.get("w_eq", defaults.w_eq)),
+        w_u=float(section.get("w_u", defaults.w_u)),
+        w_da=float(section.get("w_da", defaults.w_da)),
+        w_lim=float(section.get("w_lim", defaults.w_lim)),
+    )
+
+
+def _parse_env_reward_config(data: dict[str, Any]) -> RewardConfig:
+    defaults = RewardConfig()
+    section = _as_mapping(data.get("reward"), name="reward")
+    return _build_reward_config(section, defaults)
+
+
+def _parse_train_reward_config(data: dict[str, Any]) -> RewardConfig | None:
+    if "reward" not in data:
+        return None
+    defaults = RewardConfig()
+    section = _as_mapping(data.get("reward"), name="reward")
+    return _build_reward_config(section, defaults)
+
+
 def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
     defaults = PIConfig()
     return PIConfig(
@@ -394,6 +439,7 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         log_every_steps=int(data.get("log_every_steps", defaults.log_every_steps)),
         save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
         save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
+        reward=_parse_train_reward_config(data),
     )
 
 
@@ -412,6 +458,7 @@ def parse_env_config(path: str | Path) -> EnvConfig:
         reference=_parse_reference_config(data),
         noise=_parse_noise_config(data),
         termination=_parse_termination_config(data),
+        reward=_parse_env_reward_config(data),
     )
 
 
@@ -425,3 +472,11 @@ def parse_pi_config(path: str | Path) -> PIConfig:
     """Parse YAML into :class:`PIConfig`."""
     data = load_yaml(path)
     return _parse_pi_config(data)
+
+
+def apply_train_reward_override(env_cfg: EnvConfig, train_cfg: TrainConfig) -> EnvConfig:
+    """Return an env config with any custom-env reward override applied."""
+    reward_override = getattr(train_cfg, "reward", None)
+    if reward_override is None:
+        return env_cfg
+    return replace(env_cfg, reward=reward_override)

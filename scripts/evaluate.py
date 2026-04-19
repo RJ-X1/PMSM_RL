@@ -18,7 +18,7 @@ import numpy as np
 from baselines.pi_current_controller import PICurrentController
 from envs.make_env import make_eval_env
 from envs.obs_parser import build_observation_spec, parse_flat_observation, required_eval_trace_columns
-from utils.config import parse_env_config, parse_pi_config, parse_train_config
+from utils.config import apply_train_reward_override, parse_env_config, parse_pi_config, parse_train_config
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
     DEFAULT_PI_CONFIG_PATH,
@@ -96,6 +96,7 @@ def run_evaluation(
     """Run one evaluation episode and export the trajectory CSV."""
     env_cfg = parse_env_config(env_config_path)
     train_cfg = parse_train_config(train_config_path)
+    env_cfg = apply_train_reward_override(env_cfg, train_cfg)
     pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
@@ -113,6 +114,9 @@ def run_evaluation(
     obs, _info = env.reset(seed=eval_seed)
     spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
     signal_fieldnames = list(parse_flat_observation(obs, spec=spec).keys())
+    base_env = getattr(env, "unwrapped", env)
+    reward_term_names = list(getattr(base_env, "reward_term_names", []))
+    reward_mode_name = getattr(base_env, "reward_mode", "")
     missing_trace_columns = [
         name
         for name in required_eval_trace_columns(layout=spec.layout)
@@ -168,8 +172,9 @@ def run_evaluation(
         "done",
         "done_reason",
         "termination_reason",
+        "reward_mode",
     ]
-    fieldnames += signal_fieldnames + spec.action_names
+    fieldnames += signal_fieldnames + spec.action_names + reward_term_names
 
     with final_output_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -202,9 +207,13 @@ def run_evaluation(
                 "done": int(done),
                 "done_reason": done_reason,
                 "termination_reason": done_reason,
+                "reward_mode": str(reward_mode_name),
             }
             row.update(parse_flat_observation(obs, spec=spec))
             row.update({name: float(value) for name, value in zip(spec.action_names, action)})
+            if reward_term_names:
+                reward_terms = _info.get("reward_terms", {}) if isinstance(_info, dict) else {}
+                row.update({name: float(reward_terms.get(name, 0.0)) for name in reward_term_names})
             writer.writerow(row)
 
             obs = next_obs

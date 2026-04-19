@@ -43,6 +43,14 @@ termination:
   current_limit_factor: 1.2
   terminate_on_nonfinite: true
 
+reward:
+  mode: vanilla_td3_reward
+  w_ed: 0.40
+  w_eq: 0.40
+  w_u: 0.08
+  w_da: 0.07
+  w_lim: 0.05
+
 # Legacy GEM path configuration. This block is still used when
 # `use_custom_env: false`.
 gem_kwargs:
