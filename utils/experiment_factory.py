@@ -12,6 +12,7 @@ from envs.make_env import EnvBuildConfig
 DEFAULT_ENV_CONFIG_PATH = Path("configs/env/pmsm_cc.yaml")
 DEFAULT_TRAIN_CONFIG_PATH = Path("configs/train/ddpg_main.yaml")
 DEFAULT_EVAL_CONFIG_PATH = Path("configs/eval/default.yaml")
+DEFAULT_PI_CONFIG_PATH = Path("configs/pi/pi_default.yaml")
 DEFAULT_AGENT_NAME = "ddpg"
 DEFAULT_TASK_NAME = "pmsm_current_control"
 

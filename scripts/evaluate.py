@@ -18,9 +18,10 @@ import numpy as np
 from baselines.pi_current_controller import PICurrentController
 from envs.make_env import make_eval_env
 from envs.obs_parser import build_observation_spec, parse_flat_observation, required_eval_trace_columns
-from utils.config import parse_env_config, parse_train_config
+from utils.config import parse_env_config, parse_pi_config, parse_train_config
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
+    DEFAULT_PI_CONFIG_PATH,
     DEFAULT_TRAIN_CONFIG_PATH,
     build_ddpg_agent,
     make_env_build_config,
@@ -34,6 +35,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate DDPG or PI baseline and export trajectory")
     parser.add_argument("--env-config", type=Path, default=DEFAULT_ENV_CONFIG_PATH)
     parser.add_argument("--train-config", type=Path, default=DEFAULT_TRAIN_CONFIG_PATH)
+    parser.add_argument("--pi-config", type=Path, default=DEFAULT_PI_CONFIG_PATH)
     parser.add_argument(
         "--checkpoint",
         type=Path,
@@ -82,6 +84,7 @@ def run_evaluation(
     *,
     env_config_path: Path,
     train_config_path: Path,
+    pi_config_path: Path,
     controller_name: str,
     checkpoint_path: Path,
     max_steps_override: int | None,
@@ -91,6 +94,7 @@ def run_evaluation(
     """Run one evaluation episode and export the trajectory CSV."""
     env_cfg = parse_env_config(env_config_path)
     train_cfg = parse_train_config(train_config_path)
+    pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
 
@@ -126,7 +130,13 @@ def run_evaluation(
             return agent.select_action(policy_obs, add_noise=False)
 
     else:
-        pi = PICurrentController(action_dim=act_dim, signal_names=spec.signal_names)
+        motor_params = env_cfg.motor.to_motor_params() if bool(getattr(env_cfg, "use_custom_env", False)) else None
+        pi = PICurrentController(
+            action_dim=act_dim,
+            signal_names=spec.signal_names,
+            config=pi_cfg.to_controller_config(),
+            motor_params=motor_params,
+        )
         pi.reset()
 
         def policy_fn(policy_obs: np.ndarray) -> np.ndarray:
@@ -162,6 +172,10 @@ def run_evaluation(
             action = policy_fn(obs)
             action = np.asarray(action, dtype=np.float32).reshape(act_dim)
             action = np.clip(action, action_low, action_high)
+            if not np.isfinite(action).all():
+                raise FloatingPointError(
+                    f"{controller_name} produced non-finite action at step {step}: {action}"
+                )
 
             next_obs, reward, terminated, truncated, _info = env.step(action)
             done = bool(terminated or truncated)
@@ -211,6 +225,7 @@ def main() -> None:
     result = run_evaluation(
         env_config_path=args.env_config,
         train_config_path=args.train_config,
+        pi_config_path=args.pi_config,
         controller_name=str(args.controller),
         checkpoint_path=args.checkpoint,
         max_steps_override=args.max_steps,

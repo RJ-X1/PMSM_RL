@@ -153,6 +153,45 @@ class EnvConfig:
 
 
 @dataclass(slots=True)
+class PIConfig:
+    """PI-controller configuration for dq current-control baselines."""
+
+    kp_d: float = 6.0
+    ki_d: float = 800.0
+    kp_q: float = 6.0
+    ki_q: float = 800.0
+    integrator_limit_d: float = 120.0
+    integrator_limit_q: float = 120.0
+    voltage_limit: float | None = None
+    action_limit: float = 1.0
+    anti_windup: str = "conditional_integration"
+    use_resistance_compensation: bool = True
+    use_decoupling: bool = True
+    use_back_emf_compensation: bool = True
+    epsilon_scale: float = float(3.141592653589793)
+
+    def to_controller_config(self) -> "PIControllerConfig":
+        """Convert this config into the runtime PI-controller dataclass."""
+        from baselines.pi_current_controller import PIControllerConfig
+
+        return PIControllerConfig(
+            kp_d=float(self.kp_d),
+            ki_d=float(self.ki_d),
+            kp_q=float(self.kp_q),
+            ki_q=float(self.ki_q),
+            integrator_limit_d=float(self.integrator_limit_d),
+            integrator_limit_q=float(self.integrator_limit_q),
+            voltage_limit=None if self.voltage_limit is None else float(self.voltage_limit),
+            action_limit=float(self.action_limit),
+            anti_windup=str(self.anti_windup),
+            use_resistance_compensation=bool(self.use_resistance_compensation),
+            use_decoupling=bool(self.use_decoupling),
+            use_back_emf_compensation=bool(self.use_back_emf_compensation),
+            epsilon_scale=float(self.epsilon_scale),
+        )
+
+
+@dataclass(slots=True)
 class TrainConfig:
     """Training configuration placeholder for DDPG experiments."""
 
@@ -276,6 +315,28 @@ def _parse_termination_config(data: dict[str, Any]) -> TerminationConfig:
     )
 
 
+def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
+    return PIConfig(
+        kp_d=float(data.get("kp_d", PIConfig.kp_d)),
+        ki_d=float(data.get("ki_d", PIConfig.ki_d)),
+        kp_q=float(data.get("kp_q", PIConfig.kp_q)),
+        ki_q=float(data.get("ki_q", PIConfig.ki_q)),
+        integrator_limit_d=float(data.get("integrator_limit_d", PIConfig.integrator_limit_d)),
+        integrator_limit_q=float(data.get("integrator_limit_q", PIConfig.integrator_limit_q)),
+        voltage_limit=None if data.get("voltage_limit", PIConfig.voltage_limit) is None else float(data["voltage_limit"]),
+        action_limit=float(data.get("action_limit", PIConfig.action_limit)),
+        anti_windup=str(data.get("anti_windup", PIConfig.anti_windup)),
+        use_resistance_compensation=bool(
+            data.get("use_resistance_compensation", PIConfig.use_resistance_compensation)
+        ),
+        use_decoupling=bool(data.get("use_decoupling", PIConfig.use_decoupling)),
+        use_back_emf_compensation=bool(
+            data.get("use_back_emf_compensation", PIConfig.use_back_emf_compensation)
+        ),
+        epsilon_scale=float(data.get("epsilon_scale", PIConfig.epsilon_scale)),
+    )
+
+
 def parse_env_config(path: str | Path) -> EnvConfig:
     """Parse YAML into :class:`EnvConfig` with backward-compatible defaults."""
     data = load_yaml(path)
@@ -297,3 +358,9 @@ def parse_train_config(path: str | Path) -> TrainConfig:
     """Parse YAML into :class:`TrainConfig`."""
     data = load_yaml(path)
     return TrainConfig(**data)
+
+
+def parse_pi_config(path: str | Path) -> PIConfig:
+    """Parse YAML into :class:`PIConfig`."""
+    data = load_yaml(path)
+    return _parse_pi_config(data)

@@ -1,0 +1,24 @@
+# Paper-style dq-axis PI baseline defaults for the custom PMSM environment.
+
+kp_d: 6.0
+ki_d: 800.0
+kp_q: 6.0
+ki_q: 800.0
+
+# Integral contribution limits in volts.
+integrator_limit_d: 120.0
+integrator_limit_q: 120.0
+
+# Use the environment motor Umax when null.
+voltage_limit: null
+action_limit: 1.0
+
+# Options: conditional_integration, clamp, none
+anti_windup: conditional_integration
+
+use_resistance_compensation: true
+use_decoupling: true
+use_back_emf_compensation: true
+
+# Legacy GEM epsilon -> electrical-angle scaling.
+epsilon_scale: 3.141592653589793
