@@ -1,0 +1,28 @@
+algo: td3
+run_name: td3_pretrain_check
+output_dir: outputs
+device: cpu
+
+total_steps: 20000
+replay_capacity: 300000
+batch_size: 128
+warmup_steps: 5000
+update_after: 5000
+max_steps_per_episode: 2000
+
+gamma: 0.99
+tau: 0.005
+lr_actor: 0.0001
+lr_critic: 0.001
+hidden_dim: 256
+
+# Slightly gentler than the smoke defaults to reduce early saturation pressure.
+exploration_noise: 0.08
+target_policy_noise: 0.12
+target_noise_clip: 0.25
+policy_delay: 2
+
+eval_every_steps: 5000
+eval_episodes: 3
+save_every_steps: 5000
+log_every_steps: 2000

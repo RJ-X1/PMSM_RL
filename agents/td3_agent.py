@@ -27,6 +27,7 @@ class TD3HyperParams:
     target_policy_noise: float = 0.20
     target_noise_clip: float = 0.50
     policy_delay: int = 2
+    grad_clip_norm: float | None = 10.0
 
 
 class TD3Agent:
@@ -102,6 +103,8 @@ class TD3Agent:
         critic_loss = F.mse_loss(current_q1, y) + F.mse_loss(current_q2, y)
         self.critic_optim.zero_grad()
         critic_loss.backward()
+        if self.hparams.grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.critics.parameters(), float(self.hparams.grad_clip_norm))
         self.critic_optim.step()
 
         actor_loss_value = 0.0
@@ -111,6 +114,8 @@ class TD3Agent:
             actor_loss = -self.critics.q1_forward(obs, pred_actions).mean()
             self.actor_optim.zero_grad()
             actor_loss.backward()
+            if self.hparams.grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), float(self.hparams.grad_clip_norm))
             self.actor_optim.step()
             self.soft_update()
             actor_loss_value = float(actor_loss.item())
