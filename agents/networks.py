@@ -64,3 +64,23 @@ class Critic(nn.Module):
             raise ValueError(f"act last dim must be {self.act_dim}, got {act.shape[-1]}")
         x = torch.cat([obs, act], dim=-1)  # (B, obs_dim + act_dim)
         return self.net(x)
+
+
+class TwinCritic(nn.Module):
+    """Twin Q-networks used by TD3 to reduce overestimation bias."""
+
+    def __init__(self, obs_dim: int, act_dim: int, hidden_dim: int = 256) -> None:
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden_dim = hidden_dim
+        self.q1 = Critic(obs_dim, act_dim, hidden_dim=hidden_dim)
+        self.q2 = Critic(obs_dim, act_dim, hidden_dim=hidden_dim)
+
+    def forward(self, obs: torch.Tensor, act: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Estimate both Q-values for observation-action pairs."""
+        return self.q1(obs, act), self.q2(obs, act)
+
+    def q1_forward(self, obs: torch.Tensor, act: torch.Tensor) -> torch.Tensor:
+        """Estimate only the first Q-value head."""
+        return self.q1(obs, act)

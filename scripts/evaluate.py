@@ -23,8 +23,9 @@ from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
     DEFAULT_PI_CONFIG_PATH,
     DEFAULT_TRAIN_CONFIG_PATH,
-    build_ddpg_agent,
+    build_rl_agent,
     make_env_build_config,
+    resolve_agent_name,
 )
 from utils.run_layout import ensure_run_layout, make_run_layout
 from utils.seed import set_seed
@@ -36,11 +37,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-config", type=Path, default=DEFAULT_ENV_CONFIG_PATH)
     parser.add_argument("--train-config", type=Path, default=DEFAULT_TRAIN_CONFIG_PATH)
     parser.add_argument("--pi-config", type=Path, default=DEFAULT_PI_CONFIG_PATH)
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        default=Path("outputs/runs/ddpg_baseline/checkpoints/checkpoint_latest.pt"),
-    )
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--controller", choices=("rl", "pi"), default="rl")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
@@ -80,13 +77,18 @@ def _default_output_csv_path(train_cfg: Any, controller_name: str) -> Path:
     return layout.eval_dir / f"eval_{controller_name}.csv"
 
 
+def _default_checkpoint_path(train_cfg: Any) -> Path:
+    layout = ensure_run_layout(make_run_layout(train_cfg.run_name, train_cfg.output_dir))
+    return layout.checkpoints_dir / "checkpoint_latest.pt"
+
+
 def run_evaluation(
     *,
     env_config_path: Path,
     train_config_path: Path,
     pi_config_path: Path,
     controller_name: str,
-    checkpoint_path: Path,
+    checkpoint_path: Path | None,
     max_steps_override: int | None,
     output_csv_path: Path | None,
     seed_override: int | None = None,
@@ -103,7 +105,10 @@ def run_evaluation(
     act_dim = int(env.action_space.shape[0])
     action_low = float(env.action_space.low.min())
     action_high = float(env.action_space.high.max())
-    max_steps = int(max_steps_override if max_steps_override is not None else train_cfg.max_steps_per_episode)
+    default_eval_steps = getattr(train_cfg, "max_steps_per_episode", None)
+    if default_eval_steps is None:
+        default_eval_steps = getattr(getattr(env_cfg, "environment", None), "episode_steps", 500)
+    max_steps = int(max_steps_override if max_steps_override is not None else default_eval_steps)
 
     obs, _info = env.reset(seed=eval_seed)
     spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
@@ -117,19 +122,21 @@ def run_evaluation(
         raise KeyError(f"Evaluation export is missing required trace columns: {missing_trace_columns}")
 
     if controller_name == "rl":
-        agent = build_ddpg_agent(
+        agent = build_rl_agent(
             obs_dim=obs_dim,
             act_dim=act_dim,
             train_cfg=train_cfg,
             action_low=action_low,
             action_high=action_high,
         )
-        agent.load_checkpoint(checkpoint_path)
+        resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg)
+        agent.load_checkpoint(resolved_checkpoint)
 
         def policy_fn(policy_obs: np.ndarray) -> np.ndarray:
             return agent.select_action(policy_obs, add_noise=False)
 
     else:
+        resolved_checkpoint = checkpoint_path
         motor_params = env_cfg.motor.to_motor_params() if bool(getattr(env_cfg, "use_custom_env", False)) else None
         pi = PICurrentController(
             action_dim=act_dim,
@@ -206,13 +213,14 @@ def run_evaluation(
 
     return {
         "controller": controller_name,
+        "agent_name": resolve_agent_name(train_cfg) if controller_name == "rl" else "pi",
         "env_id": env_cfg.env_id,
         "layout": spec.layout,
         "episode_return": float(cum_reward),
         "steps": int(step + 1),
         "done_reason": final_done_reason or "not_done",
         "output_csv": final_output_csv,
-        "checkpoint_path": checkpoint_path,
+        "checkpoint_path": resolved_checkpoint,
         "seed": eval_seed,
         "terminated": int(bool(terminated)),
         "truncated": int(bool(truncated)),
@@ -233,7 +241,8 @@ def main() -> None:
         seed_override=args.seed,
     )
     print(
-        f"controller={result['controller']} env_id={result['env_id']} layout={result['layout']} "
+        f"controller={result['controller']} agent={result['agent_name']} "
+        f"env_id={result['env_id']} layout={result['layout']} "
         f"episode_return={result['episode_return']:.3f} steps={result['steps']} "
         f"done_reason={result['done_reason']} csv={result['output_csv']}"
     )

@@ -193,26 +193,35 @@ class PIConfig:
 
 @dataclass(slots=True)
 class TrainConfig:
-    """Training configuration placeholder for DDPG experiments."""
+    """Training configuration supporting legacy DDPG and new TD3 runs."""
 
+    algo: str = "ddpg"
     run_name: str = "_old_ddpg_pmsm_cc"
     output_dir: str = "outputs"
     device: str = "cpu"
     gamma: float = 0.99
-    polyak: float = 0.995
+    tau: float = 0.005
+    polyak: float | None = None
     lr_actor: float = 1e-4
     lr_critic: float = 1e-3
     replay_capacity: int = 100_000
     batch_size: int = 128
     warmup_steps: int = 2_000
+    update_after: int = 0
+    total_steps: int | None = None
+    max_episodes: int | None = 50
+    max_steps_per_episode: int | None = None
+    hidden_dim: int = 256
     exploration_noise: float = 0.1
-    max_episodes: int = 50
-    max_steps_per_episode: int = 500
-    eval_every_episodes: int = 10
+    target_policy_noise: float = 0.20
+    target_noise_clip: float = 0.50
+    policy_delay: int = 2
+    eval_every_steps: int | None = None
+    eval_every_episodes: int | None = 10
     eval_episodes: int = 3
     log_every_steps: int = 100
-    save_every_episodes: int = 25
-    hidden_dim: int = 256
+    save_every_steps: int | None = None
+    save_every_episodes: int | None = 25
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
@@ -228,38 +237,40 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 
 
 def _parse_motor_config(data: dict[str, Any]) -> MotorConfig:
+    defaults = MotorConfig()
     section = _as_mapping(data.get("motor"), name="motor")
     return MotorConfig(
-        p=float(section.get("p", MotorConfig.p)),
-        Rs=float(section.get("Rs", MotorConfig.Rs)),
-        Ld=float(section.get("Ld", MotorConfig.Ld)),
-        Lq=float(section.get("Lq", MotorConfig.Lq)),
-        psi_f=float(section.get("psi_f", MotorConfig.psi_f)),
-        J=float(section.get("J", MotorConfig.J)),
-        B=float(section.get("B", MotorConfig.B)),
-        Vdc=float(section.get("Vdc", MotorConfig.Vdc)),
-        Umax=float(section.get("Umax", MotorConfig.Umax)),
-        Imax=float(section.get("Imax", MotorConfig.Imax)),
-        Ts=float(section.get("Ts", MotorConfig.Ts)),
+        p=float(section.get("p", defaults.p)),
+        Rs=float(section.get("Rs", defaults.Rs)),
+        Ld=float(section.get("Ld", defaults.Ld)),
+        Lq=float(section.get("Lq", defaults.Lq)),
+        psi_f=float(section.get("psi_f", defaults.psi_f)),
+        J=float(section.get("J", defaults.J)),
+        B=float(section.get("B", defaults.B)),
+        Vdc=float(section.get("Vdc", defaults.Vdc)),
+        Umax=float(section.get("Umax", defaults.Umax)),
+        Imax=float(section.get("Imax", defaults.Imax)),
+        Ts=float(section.get("Ts", defaults.Ts)),
     )
 
 
 def _parse_environment_settings(data: dict[str, Any]) -> CustomEnvSettings:
+    defaults = CustomEnvSettings()
     section = _as_mapping(data.get("environment"), name="environment")
-    default_load_torque = float(section.get("load_torque", CustomEnvSettings.load_torque))
+    default_load_torque = float(section.get("load_torque", defaults.load_torque))
     return CustomEnvSettings(
-        episode_steps=int(section.get("episode_steps", CustomEnvSettings.episode_steps)),
+        episode_steps=int(section.get("episode_steps", defaults.episode_steps)),
         init_i_d_range=_as_float_pair(
             section.get("init_i_d_range"),
-            default=CustomEnvSettings.init_i_d_range,
+            default=defaults.init_i_d_range,
         ),
         init_i_q_range=_as_float_pair(
             section.get("init_i_q_range"),
-            default=CustomEnvSettings.init_i_q_range,
+            default=defaults.init_i_q_range,
         ),
         init_omega_m_range=_as_float_pair(
             section.get("init_omega_m_range"),
-            default=CustomEnvSettings.init_omega_m_range,
+            default=defaults.init_omega_m_range,
         ),
         load_torque=default_load_torque,
         load_torque_range=_as_float_pair(
@@ -270,13 +281,14 @@ def _parse_environment_settings(data: dict[str, Any]) -> CustomEnvSettings:
 
 
 def _parse_reference_config(data: dict[str, Any]) -> ReferenceConfig:
+    defaults = ReferenceConfig()
     section = _as_mapping(data.get("reference"), name="reference")
-    ref_i_d = float(section.get("ref_i_d", section.get("i_d", ReferenceConfig.ref_i_d)))
-    ref_i_q = float(section.get("ref_i_q", section.get("i_q", ReferenceConfig.ref_i_q)))
+    ref_i_d = float(section.get("ref_i_d", section.get("i_d", defaults.ref_i_d)))
+    ref_i_q = float(section.get("ref_i_q", section.get("i_q", defaults.ref_i_q)))
     return ReferenceConfig(
         ref_i_d=ref_i_d,
         ref_i_q=ref_i_q,
-        randomize_on_reset=bool(section.get("randomize_on_reset", ReferenceConfig.randomize_on_reset)),
+        randomize_on_reset=bool(section.get("randomize_on_reset", defaults.randomize_on_reset)),
         ref_i_d_range=_as_float_pair(
             section.get("ref_i_d_range"),
             default=(ref_i_d, ref_i_d),
@@ -289,63 +301,112 @@ def _parse_reference_config(data: dict[str, Any]) -> ReferenceConfig:
 
 
 def _parse_noise_config(data: dict[str, Any]) -> NoiseConfig:
+    defaults = NoiseConfig()
     section = _as_mapping(data.get("noise"), name="noise")
     return NoiseConfig(
         observation_noise_std=float(
-            section.get("observation_noise_std", NoiseConfig.observation_noise_std)
+            section.get("observation_noise_std", defaults.observation_noise_std)
         ),
-        process_noise_std=float(section.get("process_noise_std", NoiseConfig.process_noise_std)),
+        process_noise_std=float(section.get("process_noise_std", defaults.process_noise_std)),
     )
 
 
 def _parse_termination_config(data: dict[str, Any]) -> TerminationConfig:
+    defaults = TerminationConfig()
     section = _as_mapping(data.get("termination"), name="termination")
-    current_limit = section.get("current_limit", TerminationConfig.current_limit)
+    current_limit = section.get("current_limit", defaults.current_limit)
     return TerminationConfig(
         terminate_on_overcurrent=bool(
-            section.get("terminate_on_overcurrent", TerminationConfig.terminate_on_overcurrent)
+            section.get("terminate_on_overcurrent", defaults.terminate_on_overcurrent)
         ),
         current_limit=None if current_limit is None else float(current_limit),
         current_limit_factor=float(
-            section.get("current_limit_factor", TerminationConfig.current_limit_factor)
+            section.get("current_limit_factor", defaults.current_limit_factor)
         ),
         terminate_on_nonfinite=bool(
-            section.get("terminate_on_nonfinite", TerminationConfig.terminate_on_nonfinite)
+            section.get("terminate_on_nonfinite", defaults.terminate_on_nonfinite)
         ),
     )
 
 
 def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
+    defaults = PIConfig()
     return PIConfig(
-        kp_d=float(data.get("kp_d", PIConfig.kp_d)),
-        ki_d=float(data.get("ki_d", PIConfig.ki_d)),
-        kp_q=float(data.get("kp_q", PIConfig.kp_q)),
-        ki_q=float(data.get("ki_q", PIConfig.ki_q)),
-        integrator_limit_d=float(data.get("integrator_limit_d", PIConfig.integrator_limit_d)),
-        integrator_limit_q=float(data.get("integrator_limit_q", PIConfig.integrator_limit_q)),
-        voltage_limit=None if data.get("voltage_limit", PIConfig.voltage_limit) is None else float(data["voltage_limit"]),
-        action_limit=float(data.get("action_limit", PIConfig.action_limit)),
-        anti_windup=str(data.get("anti_windup", PIConfig.anti_windup)),
+        kp_d=float(data.get("kp_d", defaults.kp_d)),
+        ki_d=float(data.get("ki_d", defaults.ki_d)),
+        kp_q=float(data.get("kp_q", defaults.kp_q)),
+        ki_q=float(data.get("ki_q", defaults.ki_q)),
+        integrator_limit_d=float(data.get("integrator_limit_d", defaults.integrator_limit_d)),
+        integrator_limit_q=float(data.get("integrator_limit_q", defaults.integrator_limit_q)),
+        voltage_limit=None if data.get("voltage_limit", defaults.voltage_limit) is None else float(data["voltage_limit"]),
+        action_limit=float(data.get("action_limit", defaults.action_limit)),
+        anti_windup=str(data.get("anti_windup", defaults.anti_windup)),
         use_resistance_compensation=bool(
-            data.get("use_resistance_compensation", PIConfig.use_resistance_compensation)
+            data.get("use_resistance_compensation", defaults.use_resistance_compensation)
         ),
-        use_decoupling=bool(data.get("use_decoupling", PIConfig.use_decoupling)),
+        use_decoupling=bool(data.get("use_decoupling", defaults.use_decoupling)),
         use_back_emf_compensation=bool(
-            data.get("use_back_emf_compensation", PIConfig.use_back_emf_compensation)
+            data.get("use_back_emf_compensation", defaults.use_back_emf_compensation)
         ),
-        epsilon_scale=float(data.get("epsilon_scale", PIConfig.epsilon_scale)),
+        epsilon_scale=float(data.get("epsilon_scale", defaults.epsilon_scale)),
+    )
+
+
+def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
+    defaults = TrainConfig()
+    tau_value = data.get("tau")
+    polyak_value = data.get("polyak")
+    total_steps_value = data.get("total_steps", defaults.total_steps)
+    max_episodes_value = data.get("max_episodes", defaults.max_episodes)
+    max_steps_per_episode_value = data.get("max_steps_per_episode", defaults.max_steps_per_episode)
+    eval_every_steps_value = data.get("eval_every_steps", defaults.eval_every_steps)
+    eval_every_episodes_value = data.get("eval_every_episodes", defaults.eval_every_episodes)
+    save_every_steps_value = data.get("save_every_steps", defaults.save_every_steps)
+    save_every_episodes_value = data.get("save_every_episodes", defaults.save_every_episodes)
+    if tau_value is None and polyak_value is not None:
+        tau_value = 1.0 - float(polyak_value)
+
+    return TrainConfig(
+        algo=str(data.get("algo", defaults.algo)).lower(),
+        run_name=str(data.get("run_name", defaults.run_name)),
+        output_dir=str(data.get("output_dir", defaults.output_dir)),
+        device=str(data.get("device", defaults.device)),
+        gamma=float(data.get("gamma", defaults.gamma)),
+        tau=float(tau_value if tau_value is not None else defaults.tau),
+        polyak=None if polyak_value is None else float(polyak_value),
+        lr_actor=float(data.get("lr_actor", defaults.lr_actor)),
+        lr_critic=float(data.get("lr_critic", defaults.lr_critic)),
+        replay_capacity=int(data.get("replay_capacity", defaults.replay_capacity)),
+        batch_size=int(data.get("batch_size", defaults.batch_size)),
+        warmup_steps=int(data.get("warmup_steps", defaults.warmup_steps)),
+        update_after=int(data.get("update_after", defaults.update_after)),
+        total_steps=None if total_steps_value is None else int(total_steps_value),
+        max_episodes=None if max_episodes_value is None else int(max_episodes_value),
+        max_steps_per_episode=None if max_steps_per_episode_value is None else int(max_steps_per_episode_value),
+        hidden_dim=int(data.get("hidden_dim", defaults.hidden_dim)),
+        exploration_noise=float(data.get("exploration_noise", defaults.exploration_noise)),
+        target_policy_noise=float(data.get("target_policy_noise", defaults.target_policy_noise)),
+        target_noise_clip=float(data.get("target_noise_clip", defaults.target_noise_clip)),
+        policy_delay=int(data.get("policy_delay", defaults.policy_delay)),
+        eval_every_steps=None if eval_every_steps_value is None else int(eval_every_steps_value),
+        eval_every_episodes=None if eval_every_episodes_value is None else int(eval_every_episodes_value),
+        eval_episodes=int(data.get("eval_episodes", defaults.eval_episodes)),
+        log_every_steps=int(data.get("log_every_steps", defaults.log_every_steps)),
+        save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
+        save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
     )
 
 
 def parse_env_config(path: str | Path) -> EnvConfig:
     """Parse YAML into :class:`EnvConfig` with backward-compatible defaults."""
     data = load_yaml(path)
+    defaults = EnvConfig()
     gem_kwargs = _as_mapping(data.get("gem_kwargs"), name="gem_kwargs")
     return EnvConfig(
-        env_id=str(data.get("env_id", EnvConfig.env_id)),
-        seed=int(data.get("seed", EnvConfig.seed)),
+        env_id=str(data.get("env_id", defaults.env_id)),
+        seed=int(data.get("seed", defaults.seed)),
         gem_kwargs=gem_kwargs,
-        use_custom_env=bool(data.get("use_custom_env", False)),
+        use_custom_env=bool(data.get("use_custom_env", defaults.use_custom_env)),
         motor=_parse_motor_config(data),
         environment=_parse_environment_settings(data),
         reference=_parse_reference_config(data),
@@ -357,7 +418,7 @@ def parse_env_config(path: str | Path) -> EnvConfig:
 def parse_train_config(path: str | Path) -> TrainConfig:
     """Parse YAML into :class:`TrainConfig`."""
     data = load_yaml(path)
-    return TrainConfig(**data)
+    return _parse_train_config(data)
 
 
 def parse_pi_config(path: str | Path) -> PIConfig:
