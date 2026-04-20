@@ -51,6 +51,10 @@ reward:
   w_da: 0.07
   w_lim: 0.05
 
+action_smoothness:
+  enabled: true
+  weight: 0.07
+
 domain_randomization:
   enabled: false
   rs_scale_range: [1.0, 1.0]

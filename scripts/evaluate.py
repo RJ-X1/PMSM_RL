@@ -18,7 +18,13 @@ import numpy as np
 from baselines.pi_current_controller import PICurrentController
 from envs.make_env import make_eval_env
 from envs.obs_parser import build_observation_spec, parse_flat_observation, required_eval_trace_columns
-from utils.config import apply_train_reward_override, parse_env_config, parse_pi_config, parse_train_config
+from utils.config import (
+    apply_train_action_smoothness_override,
+    apply_train_reward_override,
+    parse_env_config,
+    parse_pi_config,
+    parse_train_config,
+)
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
     DEFAULT_PI_CONFIG_PATH,
@@ -108,6 +114,7 @@ def run_evaluation(
     env_cfg = parse_env_config(env_config_path)
     train_cfg = parse_train_config(train_config_path)
     env_cfg = apply_train_reward_override(env_cfg, train_cfg)
+    env_cfg = apply_train_action_smoothness_override(env_cfg, train_cfg)
     pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
@@ -128,6 +135,8 @@ def run_evaluation(
     base_env = getattr(env, "unwrapped", env)
     reward_term_names = list(getattr(base_env, "reward_term_names", []))
     reward_mode_name = getattr(base_env, "reward_mode", "")
+    action_smoothness_enabled = bool(getattr(base_env, "action_smoothness_enabled", False))
+    action_smoothness_weight = float(getattr(base_env, "action_smoothness_weight", 0.0))
     missing_trace_columns = [
         name
         for name in required_eval_trace_columns(layout=spec.layout)
@@ -184,6 +193,8 @@ def run_evaluation(
         "done_reason",
         "termination_reason",
         "reward_mode",
+        "action_smoothness_enabled",
+        "action_smoothness_weight",
     ]
     fieldnames += signal_fieldnames + spec.action_names + reward_term_names
 
@@ -219,6 +230,8 @@ def run_evaluation(
                 "done_reason": done_reason,
                 "termination_reason": done_reason,
                 "reward_mode": str(reward_mode_name),
+                "action_smoothness_enabled": int(action_smoothness_enabled),
+                "action_smoothness_weight": float(action_smoothness_weight),
             }
             row.update(parse_flat_observation(obs, spec=spec))
             row.update({name: float(value) for name, value in zip(spec.action_names, action)})

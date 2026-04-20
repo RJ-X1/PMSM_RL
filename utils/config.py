@@ -141,6 +141,14 @@ class RewardConfig:
 
 
 @dataclass(slots=True)
+class ActionSmoothnessConfig:
+    """Explicit action-smoothness regularization settings."""
+
+    enabled: bool = True
+    weight: float = 0.07
+
+
+@dataclass(slots=True)
 class DomainRandomizationConfig:
     """Training-time domain-randomization settings for the custom PMSM env."""
 
@@ -191,6 +199,7 @@ class EnvConfig:
     noise: NoiseConfig = field(default_factory=NoiseConfig)
     termination: TerminationConfig = field(default_factory=TerminationConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
+    action_smoothness: ActionSmoothnessConfig = field(default_factory=ActionSmoothnessConfig)
     domain_randomization: DomainRandomizationConfig = field(default_factory=DomainRandomizationConfig)
 
     def to_custom_env_kwargs(self, *, apply_domain_randomization: bool | None = None) -> dict[str, Any]:
@@ -224,6 +233,8 @@ class EnvConfig:
             "reward_w_u": float(self.reward.w_u),
             "reward_w_da": float(self.reward.w_da),
             "reward_w_lim": float(self.reward.w_lim),
+            "action_smoothness_enabled": bool(self.action_smoothness.enabled),
+            "action_smoothness_weight": float(self.action_smoothness.weight),
             "domain_randomization": self.domain_randomization.to_env_kwargs(),
             "apply_domain_randomization": effective_apply_dr,
         }
@@ -300,6 +311,7 @@ class TrainConfig:
     save_every_steps: int | None = None
     save_every_episodes: int | None = 25
     reward: RewardConfig | None = None
+    action_smoothness: ActionSmoothnessConfig | None = None
     domain_randomization: DomainRandomizationConfig | None = None
 
 
@@ -433,6 +445,47 @@ def _parse_train_reward_config(data: dict[str, Any]) -> RewardConfig | None:
     return _build_reward_config(section, defaults)
 
 
+def _build_action_smoothness_config(
+    section: Mapping[str, Any],
+    *,
+    default_enabled: bool,
+    default_weight: float,
+) -> ActionSmoothnessConfig:
+    return ActionSmoothnessConfig(
+        enabled=bool(section.get("enabled", default_enabled)),
+        weight=float(section.get("weight", default_weight)),
+    )
+
+
+def _parse_env_action_smoothness_config(
+    data: dict[str, Any],
+    *,
+    reward_cfg: RewardConfig,
+) -> ActionSmoothnessConfig:
+    section = _as_mapping(data.get("action_smoothness"), name="action_smoothness")
+    return _build_action_smoothness_config(
+        section,
+        default_enabled=True,
+        default_weight=float(reward_cfg.w_da),
+    )
+
+
+def _parse_train_action_smoothness_config(
+    data: dict[str, Any],
+    *,
+    reward_cfg: RewardConfig | None,
+) -> ActionSmoothnessConfig | None:
+    if "action_smoothness" not in data:
+        return None
+    section = _as_mapping(data.get("action_smoothness"), name="action_smoothness")
+    default_weight = float(reward_cfg.w_da) if reward_cfg is not None else float(ActionSmoothnessConfig().weight)
+    return _build_action_smoothness_config(
+        section,
+        default_enabled=True,
+        default_weight=default_weight,
+    )
+
+
 def _build_domain_randomization_config(
     section: Mapping[str, Any],
     defaults: DomainRandomizationConfig,
@@ -534,6 +587,7 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
     save_every_episodes_value = data.get("save_every_episodes", defaults.save_every_episodes)
     if tau_value is None and polyak_value is not None:
         tau_value = 1.0 - float(polyak_value)
+    train_reward = _parse_train_reward_config(data)
 
     return TrainConfig(
         algo=str(data.get("algo", defaults.algo)).lower(),
@@ -563,7 +617,11 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         log_every_steps=int(data.get("log_every_steps", defaults.log_every_steps)),
         save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
         save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
-        reward=_parse_train_reward_config(data),
+        reward=train_reward,
+        action_smoothness=_parse_train_action_smoothness_config(
+            data,
+            reward_cfg=train_reward,
+        ),
         domain_randomization=_parse_train_domain_randomization_config(data),
     )
 
@@ -573,6 +631,7 @@ def parse_env_config(path: str | Path) -> EnvConfig:
     data = load_yaml(path)
     defaults = EnvConfig()
     gem_kwargs = _as_mapping(data.get("gem_kwargs"), name="gem_kwargs")
+    reward_cfg = _parse_env_reward_config(data)
     return EnvConfig(
         env_id=str(data.get("env_id", defaults.env_id)),
         seed=int(data.get("seed", defaults.seed)),
@@ -583,7 +642,11 @@ def parse_env_config(path: str | Path) -> EnvConfig:
         reference=_parse_reference_config(data),
         noise=_parse_noise_config(data),
         termination=_parse_termination_config(data),
-        reward=_parse_env_reward_config(data),
+        reward=reward_cfg,
+        action_smoothness=_parse_env_action_smoothness_config(
+            data,
+            reward_cfg=reward_cfg,
+        ),
         domain_randomization=_parse_env_domain_randomization_config(data),
     )
 
@@ -617,3 +680,14 @@ def apply_train_domain_randomization_override(
     if dr_override is None:
         return env_cfg
     return replace(env_cfg, domain_randomization=dr_override)
+
+
+def apply_train_action_smoothness_override(
+    env_cfg: EnvConfig,
+    train_cfg: TrainConfig,
+) -> EnvConfig:
+    """Return an env config with any explicit action-smoothness override applied."""
+    smoothness_override = getattr(train_cfg, "action_smoothness", None)
+    if smoothness_override is None:
+        return env_cfg
+    return replace(env_cfg, action_smoothness=smoothness_override)

@@ -52,6 +52,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         "reward_tracking_q",
         "reward_voltage_effort",
         "reward_delta_action",
+        "reward_action_smoothness",
         "reward_limit_penalty",
     )
 
@@ -81,6 +82,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         reward_w_u: float | None = None,
         reward_w_da: float | None = None,
         reward_w_lim: float | None = None,
+        action_smoothness_enabled: bool | None = None,
+        action_smoothness_weight: float | None = None,
         reward_error_weight: float | None = None,
         reward_voltage_weight: float | None = None,
         reward_delta_action_weight: float | None = None,
@@ -130,6 +133,12 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.reward_w_lim = float(0.05 if reward_limit_weight is None and reward_w_lim is None else (
             reward_limit_weight if reward_w_lim is None else reward_w_lim
         ))
+        self.action_smoothness_enabled = bool(
+            self.reward_w_da > 0.0 if action_smoothness_enabled is None else action_smoothness_enabled
+        )
+        self.action_smoothness_weight = float(
+            self.reward_w_da if action_smoothness_weight is None else action_smoothness_weight
+        )
 
         self.current_limit = self.env_params.resolved_current_limit(self.motor_params)
         self.observation_names = list(self.OBSERVATION_NAMES)
@@ -401,6 +410,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "env_id": self.env_id,
             "done_reason": done_reason,
             "reward_mode": self.reward_mode,
+            "action_smoothness_enabled": bool(self.action_smoothness_enabled),
+            "action_smoothness_weight": float(self.action_smoothness_weight),
             "domain_randomization_active": bool(self.last_randomization_sample.get("domain_randomization_active", False)),
             "elapsed_steps": int(self.elapsed_steps),
             "i_d": float(self.state.i_d),
@@ -457,6 +468,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         tracking_q = float(abs(float(e_q)) / i_scale)
         voltage_effort = float(np.dot(u_dq / u_scale, u_dq / u_scale))
         delta_action = float(np.dot(delta_a, delta_a))
+        action_smoothness_term = float(delta_action if self.action_smoothness_enabled else 0.0)
         if self.reward_mode == "constraint_aware_reward":
             limit_penalty = self._constraint_aware_limit_penalty()
         elif self.reward_mode == "vanilla_td3_reward":
@@ -468,7 +480,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             - self.reward_w_ed * tracking_d
             - self.reward_w_eq * tracking_q
             - self.reward_w_u * voltage_effort
-            - self.reward_w_da * delta_action
+            - self.action_smoothness_weight * action_smoothness_term
             - self.reward_w_lim * limit_penalty
         )
         terms = OrderedDict(
@@ -476,6 +488,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             reward_tracking_q=tracking_q,
             reward_voltage_effort=voltage_effort,
             reward_delta_action=delta_action,
+            reward_action_smoothness=action_smoothness_term,
             reward_limit_penalty=float(limit_penalty),
         )
         safe_reward = float(np.nan_to_num(reward, nan=-1.0, posinf=-1.0, neginf=-1.0))

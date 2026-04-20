@@ -19,6 +19,7 @@ import numpy as np
 from agents.replay_buffer import ReplayBuffer
 from envs.make_env import make_eval_env, make_train_env
 from utils.config import (
+    apply_train_action_smoothness_override,
     apply_train_domain_randomization_override,
     apply_train_reward_override,
     parse_env_config,
@@ -162,12 +163,14 @@ def main() -> None:
     env_cfg = parse_env_config(args.env_config)
     train_cfg = parse_train_config(args.train_config)
     env_cfg = apply_train_reward_override(env_cfg, train_cfg)
+    env_cfg = apply_train_action_smoothness_override(env_cfg, train_cfg)
     env_cfg = apply_train_domain_randomization_override(env_cfg, train_cfg)
     set_seed(int(env_cfg.seed))
 
     env = make_train_env(
         make_env_build_config(env_cfg, apply_domain_randomization=None)
     )
+    base_env = getattr(env, "unwrapped", env)
     obs_dim = int(env.observation_space.shape[0])
     act_dim = int(env.action_space.shape[0])
     action_low = float(env.action_space.low.min())
@@ -231,6 +234,13 @@ def main() -> None:
     best_ckpt = layout.checkpoints_dir / "checkpoint_best.pt"
     best_ckpt_meta = layout.run_dir / "best_checkpoint.json"
     reward_mode = str(getattr(getattr(env_cfg, "reward", None), "mode", ""))
+    print(
+        "components "
+        f"reward_mode={reward_mode} "
+        f"action_smoothness={bool(getattr(base_env, 'action_smoothness_enabled', False))} "
+        f"action_smoothness_weight={float(getattr(base_env, 'action_smoothness_weight', 0.0)):.4f} "
+        f"domain_randomization={bool(getattr(base_env, 'apply_domain_randomization', False))}"
+    )
     obs, _info = env.reset(seed=int(env_cfg.seed))
     episode_idx = 0
     episode_steps = 0
