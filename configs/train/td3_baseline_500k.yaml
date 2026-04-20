@@ -1,3 +1,5 @@
+# Ablation: Vanilla TD3 baseline.
+# Active components: TD3 only.
 algo: td3
 run_name: td3_baseline_500k
 output_dir: outputs

@@ -1,3 +1,5 @@
+# Ablation: TD3 + constraint-aware reward.
+# Active components: reward enhancement only.
 algo: td3
 run_name: cdr_td3_reward_main
 output_dir: outputs

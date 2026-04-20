@@ -1,3 +1,5 @@
+# Ablation: full CDR-TD3.
+# Active components: reward enhancement + training-time DR + explicit action smoothness.
 algo: td3
 run_name: cdr_td3_full_main
 output_dir: outputs

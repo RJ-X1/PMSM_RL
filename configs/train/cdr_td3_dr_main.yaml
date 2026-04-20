@@ -1,3 +1,5 @@
+# Ablation: TD3 + constraint-aware reward + domain randomization.
+# Active components: reward enhancement + training-time DR.
 algo: td3
 run_name: cdr_td3_dr_main
 output_dir: outputs
