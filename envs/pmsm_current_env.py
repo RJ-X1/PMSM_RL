@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import replace
 from typing import Any, Iterable
 
 import gymnasium as gym
@@ -72,6 +73,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         load_torque_range: Iterable[float] = (0.0, 0.0),
         observation_noise_std: float = 0.0,
         process_noise_std: float = 0.0,
+        domain_randomization: dict[str, Any] | None = None,
+        apply_domain_randomization: bool = False,
         reward_mode: str = "vanilla_td3_reward",
         reward_w_ed: float | None = None,
         reward_w_eq: float | None = None,
@@ -87,7 +90,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.env_id = str(env_id)
         self.is_custom_pmsm_env = True
 
-        self.motor_params = motor_params or PMSMMotorParams()
+        self.nominal_motor_params = motor_params or PMSMMotorParams()
+        self.motor_params = replace(self.nominal_motor_params)
         self.env_params = env_params or PMSMEnvParams()
 
         self.ref_i_d = float(ref_i_d)
@@ -106,7 +110,13 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         )
 
         self.observation_noise_std = float(observation_noise_std)
+        self.base_current_measurement_noise_std = float(observation_noise_std)
+        self.base_speed_measurement_noise_std = float(observation_noise_std)
+        self.current_measurement_noise_std = float(self.base_current_measurement_noise_std)
+        self.speed_measurement_noise_std = float(self.base_speed_measurement_noise_std)
         self.process_noise_std = float(process_noise_std)
+        self.domain_randomization = self._normalize_domain_randomization_config(domain_randomization)
+        self.apply_domain_randomization = bool(apply_domain_randomization)
         legacy_error_weight = 0.40 if reward_error_weight is None else float(reward_error_weight)
         self.reward_mode = str(reward_mode).strip().lower()
         self.reward_w_ed = float(legacy_error_weight if reward_w_ed is None else reward_w_ed)
@@ -142,6 +152,9 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.prev_action = np.zeros(2, dtype=np.float64)
         self.prev_u_dq = np.zeros(2, dtype=np.float64)
         self.load_torque = self.fixed_load_torque
+        self.load_schedule_active = False
+        self.next_load_change_step: int | None = None
+        self.last_randomization_sample: dict[str, float | bool | int] = {}
         self.elapsed_steps = 0
 
     @staticmethod
@@ -154,11 +167,94 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         lo, hi = float(arr[0]), float(arr[1])
         return (lo, hi) if lo <= hi else (hi, lo)
 
+    @staticmethod
+    def _as_int_range(values: Iterable[int], *, default: tuple[int, int]) -> tuple[int, int]:
+        arr = np.asarray(list(values), dtype=np.int64).reshape(-1)
+        if arr.size == 0:
+            return int(default[0]), int(default[1])
+        if arr.size != 2:
+            raise ValueError(f"Expected a 2-value integer range, got {arr.tolist()}")
+        lo, hi = int(arr[0]), int(arr[1])
+        return (lo, hi) if lo <= hi else (hi, lo)
+
+    def _normalize_domain_randomization_config(
+        self,
+        config: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        defaults = {
+            "enabled": False,
+            "rs_scale_range": (1.0, 1.0),
+            "ld_scale_range": (1.0, 1.0),
+            "lq_scale_range": (1.0, 1.0),
+            "psi_f_scale_range": (1.0, 1.0),
+            "j_scale_range": (1.0, 1.0),
+            "vdc_scale_range": (1.0, 1.0),
+            "sigma_i_range": (0.0, 0.0),
+            "sigma_omega_range": (0.0, 0.0),
+            "sigma_omega_rpm_range": (0.0, 0.0),
+            "load_torque_range": (self.fixed_load_torque, self.fixed_load_torque),
+            "load_change_interval_steps_range": (0, 0),
+        }
+        raw = dict(config or {})
+        return {
+            "enabled": bool(raw.get("enabled", defaults["enabled"])),
+            "rs_scale_range": self._as_range(
+                raw.get("rs_scale_range", defaults["rs_scale_range"]),
+                default=defaults["rs_scale_range"],
+            ),
+            "ld_scale_range": self._as_range(
+                raw.get("ld_scale_range", defaults["ld_scale_range"]),
+                default=defaults["ld_scale_range"],
+            ),
+            "lq_scale_range": self._as_range(
+                raw.get("lq_scale_range", defaults["lq_scale_range"]),
+                default=defaults["lq_scale_range"],
+            ),
+            "psi_f_scale_range": self._as_range(
+                raw.get("psi_f_scale_range", defaults["psi_f_scale_range"]),
+                default=defaults["psi_f_scale_range"],
+            ),
+            "j_scale_range": self._as_range(
+                raw.get("j_scale_range", defaults["j_scale_range"]),
+                default=defaults["j_scale_range"],
+            ),
+            "vdc_scale_range": self._as_range(
+                raw.get("vdc_scale_range", defaults["vdc_scale_range"]),
+                default=defaults["vdc_scale_range"],
+            ),
+            "sigma_i_range": self._as_range(
+                raw.get("sigma_i_range", defaults["sigma_i_range"]),
+                default=defaults["sigma_i_range"],
+            ),
+            "sigma_omega_range": self._as_range(
+                raw.get("sigma_omega_range", defaults["sigma_omega_range"]),
+                default=defaults["sigma_omega_range"],
+            ),
+            "sigma_omega_rpm_range": self._as_range(
+                raw.get("sigma_omega_rpm_range", defaults["sigma_omega_rpm_range"]),
+                default=defaults["sigma_omega_rpm_range"],
+            ),
+            "load_torque_range": self._as_range(
+                raw.get("load_torque_range", defaults["load_torque_range"]),
+                default=defaults["load_torque_range"],
+            ),
+            "load_change_interval_steps_range": self._as_int_range(
+                raw.get("load_change_interval_steps_range", defaults["load_change_interval_steps_range"]),
+                default=defaults["load_change_interval_steps_range"],
+            ),
+        }
+
     def _sample_uniform(self, value_range: tuple[float, float]) -> float:
         low, high = value_range
         if low == high:
             return float(low)
         return float(self.np_random.uniform(low, high))
+
+    def _sample_int(self, value_range: tuple[int, int]) -> int:
+        low, high = int(value_range[0]), int(value_range[1])
+        if low >= high:
+            return int(low)
+        return int(self.np_random.integers(low, high + 1))
 
     def _sample_reference(self) -> tuple[float, float]:
         if not self.randomize_reference:
@@ -175,10 +271,103 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         noisy += self.np_random.normal(0.0, self.process_noise_std, size=3)
         return PMSMState.from_array(noisy)
 
+    def _sample_domain_randomization(self) -> None:
+        """Sample active motor/noise/load parameters for one episode."""
+        dr = self.domain_randomization
+        if not (self.apply_domain_randomization and bool(dr.get("enabled", False))):
+            self.motor_params = replace(self.nominal_motor_params)
+            self.current_measurement_noise_std = float(self.base_current_measurement_noise_std)
+            self.speed_measurement_noise_std = float(self.base_speed_measurement_noise_std)
+            self.load_torque = self._sample_uniform(self.load_torque_range)
+            self.load_schedule_active = False
+            self.next_load_change_step = None
+            self.current_limit = self.env_params.resolved_current_limit(self.motor_params)
+            sigma_omega_rpm = float(
+                self.speed_measurement_noise_std * (60.0 / (2.0 * np.pi))
+            )
+            self.last_randomization_sample = {
+                "domain_randomization_active": False,
+                "Rs": float(self.motor_params.Rs),
+                "Ld": float(self.motor_params.Ld),
+                "Lq": float(self.motor_params.Lq),
+                "psi_f": float(self.motor_params.psi_f),
+                "J": float(self.motor_params.J),
+                "Vdc": float(self.motor_params.Vdc),
+                "Umax": float(self.motor_params.Umax),
+                "sigma_i": float(self.current_measurement_noise_std),
+                "sigma_omega_rpm": sigma_omega_rpm,
+                "load_torque": float(self.load_torque),
+                "load_schedule_active": False,
+                "load_change_interval_steps": 0,
+            }
+            return
+
+        rs_scale = self._sample_uniform(dr["rs_scale_range"])
+        ld_scale = self._sample_uniform(dr["ld_scale_range"])
+        lq_scale = self._sample_uniform(dr["lq_scale_range"])
+        psi_f_scale = self._sample_uniform(dr["psi_f_scale_range"])
+        j_scale = self._sample_uniform(dr["j_scale_range"])
+        vdc_scale = self._sample_uniform(dr["vdc_scale_range"])
+
+        self.motor_params = replace(
+            self.nominal_motor_params,
+            Rs=float(self.nominal_motor_params.Rs) * rs_scale,
+            Ld=float(self.nominal_motor_params.Ld) * ld_scale,
+            Lq=float(self.nominal_motor_params.Lq) * lq_scale,
+            psi_f=float(self.nominal_motor_params.psi_f) * psi_f_scale,
+            J=float(self.nominal_motor_params.J) * j_scale,
+            Vdc=float(self.nominal_motor_params.Vdc) * vdc_scale,
+            Umax=float(self.nominal_motor_params.Umax) * vdc_scale,
+        )
+        self.current_limit = self.env_params.resolved_current_limit(self.motor_params)
+        self.current_measurement_noise_std = self._sample_uniform(dr["sigma_i_range"])
+        self.speed_measurement_noise_std = self._sample_uniform(dr["sigma_omega_range"])
+        self.load_torque = self._sample_uniform(dr["load_torque_range"])
+
+        change_interval_range = dr["load_change_interval_steps_range"]
+        self.load_schedule_active = int(change_interval_range[1]) > 0
+        if self.load_schedule_active:
+            self.next_load_change_step = self._sample_int(change_interval_range)
+        else:
+            self.next_load_change_step = None
+
+        sigma_omega_rpm = float(
+            self.speed_measurement_noise_std * (60.0 / (2.0 * np.pi))
+        )
+        self.last_randomization_sample = {
+            "domain_randomization_active": True,
+            "Rs": float(self.motor_params.Rs),
+            "Ld": float(self.motor_params.Ld),
+            "Lq": float(self.motor_params.Lq),
+            "psi_f": float(self.motor_params.psi_f),
+            "J": float(self.motor_params.J),
+            "Vdc": float(self.motor_params.Vdc),
+            "Umax": float(self.motor_params.Umax),
+            "sigma_i": float(self.current_measurement_noise_std),
+            "sigma_omega_rpm": float(sigma_omega_rpm),
+            "load_torque": float(self.load_torque),
+            "load_schedule_active": bool(self.load_schedule_active),
+            "load_change_interval_steps": int(self.next_load_change_step or 0),
+        }
+
+    def _maybe_update_load_torque_schedule(self) -> None:
+        """Apply piecewise-constant load changes when DR enables a schedule."""
+        if not self.load_schedule_active or self.next_load_change_step is None:
+            return
+        if self.elapsed_steps < int(self.next_load_change_step):
+            return
+        self.load_torque = self._sample_uniform(self.domain_randomization["load_torque_range"])
+        interval = self._sample_int(self.domain_randomization["load_change_interval_steps_range"])
+        self.next_load_change_step = int(self.elapsed_steps + max(interval, 1))
+        self.last_randomization_sample["load_torque"] = float(self.load_torque)
+        self.last_randomization_sample["load_change_interval_steps"] = int(interval)
+
     def _measured_state(self) -> tuple[float, float, float]:
         values = self.state.as_array(dtype=np.float64)
-        if self.observation_noise_std > 0.0:
-            values += self.np_random.normal(0.0, self.observation_noise_std, size=3)
+        if self.current_measurement_noise_std > 0.0:
+            values[:2] += self.np_random.normal(0.0, self.current_measurement_noise_std, size=2)
+        if self.speed_measurement_noise_std > 0.0:
+            values[2] += float(self.np_random.normal(0.0, self.speed_measurement_noise_std))
         i_d, i_q, omega_m = values
         return float(i_d), float(i_q), float(omega_m)
 
@@ -212,6 +401,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "env_id": self.env_id,
             "done_reason": done_reason,
             "reward_mode": self.reward_mode,
+            "domain_randomization_active": bool(self.last_randomization_sample.get("domain_randomization_active", False)),
             "elapsed_steps": int(self.elapsed_steps),
             "i_d": float(self.state.i_d),
             "i_q": float(self.state.i_q),
@@ -225,6 +415,20 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "current_limit": float(self.current_limit),
             "torque_e": torque_e,
             "reward": float(reward),
+            "active_Rs": float(self.motor_params.Rs),
+            "active_Ld": float(self.motor_params.Ld),
+            "active_Lq": float(self.motor_params.Lq),
+            "active_psi_f": float(self.motor_params.psi_f),
+            "active_J": float(self.motor_params.J),
+            "active_Vdc": float(self.motor_params.Vdc),
+            "active_Umax": float(self.motor_params.Umax),
+            "current_measurement_noise_std": float(self.current_measurement_noise_std),
+            "speed_measurement_noise_std": float(self.speed_measurement_noise_std),
+            "speed_measurement_noise_rpm": float(
+                self.speed_measurement_noise_std * (60.0 / (2.0 * np.pi))
+            ),
+            "load_schedule_active": bool(self.load_schedule_active),
+            "next_load_change_step": None if self.next_load_change_step is None else int(self.next_load_change_step),
         }
 
     def _vanilla_limit_penalty(self, current_mag: float) -> float:
@@ -291,8 +495,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             i_q=self._sample_uniform(self.init_i_q_range),
             omega_m=self._sample_uniform(self.init_omega_m_range),
         )
+        self._sample_domain_randomization()
         self.ref_i_d, self.ref_i_q = self._sample_reference()
-        self.load_torque = self._sample_uniform(self.load_torque_range)
         self.prev_action = np.zeros(2, dtype=np.float64)
         self.prev_u_dq = np.zeros(2, dtype=np.float64)
         self.elapsed_steps = 0
@@ -312,6 +516,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             return safe_obs, -1.0, True, False, self._build_info(done_reason="non_finite_action")
 
         clipped_action = np.clip(action_arr, -1.0, 1.0)
+        self._maybe_update_load_torque_schedule()
         u_dq = clip_voltage_vector(
             clipped_action * float(self.motor_params.Umax),
             limit=float(self.motor_params.Umax),

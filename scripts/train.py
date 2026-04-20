@@ -18,7 +18,12 @@ import numpy as np
 
 from agents.replay_buffer import ReplayBuffer
 from envs.make_env import make_eval_env, make_train_env
-from utils.config import apply_train_reward_override, parse_env_config, parse_train_config
+from utils.config import (
+    apply_train_domain_randomization_override,
+    apply_train_reward_override,
+    parse_env_config,
+    parse_train_config,
+)
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
     DEFAULT_EVAL_CONFIG_PATH,
@@ -100,7 +105,13 @@ def _evaluate_policy(
     episode_horizon: int,
     seed: int,
 ) -> float:
-    eval_env = make_eval_env(make_env_build_config(env_cfg, seed_override=seed))
+    eval_env = make_eval_env(
+        make_env_build_config(
+            env_cfg,
+            seed_override=seed,
+            apply_domain_randomization=False,
+        )
+    )
     returns: list[float] = []
     for episode_idx in range(int(eval_episodes)):
         obs, _info = eval_env.reset(seed=seed + episode_idx)
@@ -151,9 +162,12 @@ def main() -> None:
     env_cfg = parse_env_config(args.env_config)
     train_cfg = parse_train_config(args.train_config)
     env_cfg = apply_train_reward_override(env_cfg, train_cfg)
+    env_cfg = apply_train_domain_randomization_override(env_cfg, train_cfg)
     set_seed(int(env_cfg.seed))
 
-    env = make_train_env(make_env_build_config(env_cfg))
+    env = make_train_env(
+        make_env_build_config(env_cfg, apply_domain_randomization=None)
+    )
     obs_dim = int(env.observation_space.shape[0])
     act_dim = int(env.action_space.shape[0])
     action_low = float(env.action_space.low.min())

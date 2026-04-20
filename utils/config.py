@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -29,6 +30,18 @@ def _as_float_pair(value: Any, *, default: tuple[float, float]) -> tuple[float, 
         hi = float(value[1])
         return (lo, hi) if lo <= hi else (hi, lo)
     raise TypeError(f"Expected range value to be a list/tuple, got {type(value)}")
+
+
+def _as_int_pair(value: Any, *, default: tuple[int, int]) -> tuple[int, int]:
+    if value is None:
+        return int(default[0]), int(default[1])
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ValueError(f"Expected a 2-value integer range, got {value}")
+        lo = int(value[0])
+        hi = int(value[1])
+        return (lo, hi) if lo <= hi else (hi, lo)
+    raise TypeError(f"Expected integer range value to be a list/tuple, got {type(value)}")
 
 
 @dataclass(slots=True)
@@ -128,6 +141,43 @@ class RewardConfig:
 
 
 @dataclass(slots=True)
+class DomainRandomizationConfig:
+    """Training-time domain-randomization settings for the custom PMSM env."""
+
+    enabled: bool = False
+    rs_scale_range: tuple[float, float] = (1.0, 1.0)
+    ld_scale_range: tuple[float, float] = (1.0, 1.0)
+    lq_scale_range: tuple[float, float] = (1.0, 1.0)
+    psi_f_scale_range: tuple[float, float] = (1.0, 1.0)
+    j_scale_range: tuple[float, float] = (1.0, 1.0)
+    vdc_scale_range: tuple[float, float] = (1.0, 1.0)
+    sigma_i_range: tuple[float, float] = (0.0, 0.0)
+    sigma_omega_rpm_range: tuple[float, float] = (0.0, 0.0)
+    load_torque_range: tuple[float, float] = (0.0, 0.0)
+    load_change_interval_steps_range: tuple[int, int] = (0, 0)
+
+    def to_env_kwargs(self) -> dict[str, Any]:
+        """Convert config into env-friendly keyword arguments."""
+        sigma_omega_rad_range = tuple(
+            float(value) * (2.0 * math.pi / 60.0) for value in self.sigma_omega_rpm_range
+        )
+        return {
+            "enabled": bool(self.enabled),
+            "rs_scale_range": tuple(self.rs_scale_range),
+            "ld_scale_range": tuple(self.ld_scale_range),
+            "lq_scale_range": tuple(self.lq_scale_range),
+            "psi_f_scale_range": tuple(self.psi_f_scale_range),
+            "j_scale_range": tuple(self.j_scale_range),
+            "vdc_scale_range": tuple(self.vdc_scale_range),
+            "sigma_i_range": tuple(self.sigma_i_range),
+            "sigma_omega_range": sigma_omega_rad_range,
+            "sigma_omega_rpm_range": tuple(self.sigma_omega_rpm_range),
+            "load_torque_range": tuple(self.load_torque_range),
+            "load_change_interval_steps_range": tuple(self.load_change_interval_steps_range),
+        }
+
+
+@dataclass(slots=True)
 class EnvConfig:
     """Environment configuration supporting both GEM and custom PMSM modes."""
 
@@ -141,9 +191,15 @@ class EnvConfig:
     noise: NoiseConfig = field(default_factory=NoiseConfig)
     termination: TerminationConfig = field(default_factory=TerminationConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
+    domain_randomization: DomainRandomizationConfig = field(default_factory=DomainRandomizationConfig)
 
-    def to_custom_env_kwargs(self) -> dict[str, Any]:
+    def to_custom_env_kwargs(self, *, apply_domain_randomization: bool | None = None) -> dict[str, Any]:
         """Build kwargs for :class:`envs.pmsm_current_env.PMSMCurrentControlEnv`."""
+        effective_apply_dr = (
+            bool(self.domain_randomization.enabled)
+            if apply_domain_randomization is None
+            else bool(apply_domain_randomization)
+        )
         return {
             "env_id": str(self.env_id),
             "motor_params": self.motor.to_motor_params(),
@@ -168,6 +224,8 @@ class EnvConfig:
             "reward_w_u": float(self.reward.w_u),
             "reward_w_da": float(self.reward.w_da),
             "reward_w_lim": float(self.reward.w_lim),
+            "domain_randomization": self.domain_randomization.to_env_kwargs(),
+            "apply_domain_randomization": effective_apply_dr,
         }
 
 
@@ -242,6 +300,7 @@ class TrainConfig:
     save_every_steps: int | None = None
     save_every_episodes: int | None = 25
     reward: RewardConfig | None = None
+    domain_randomization: DomainRandomizationConfig | None = None
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
@@ -374,6 +433,71 @@ def _parse_train_reward_config(data: dict[str, Any]) -> RewardConfig | None:
     return _build_reward_config(section, defaults)
 
 
+def _build_domain_randomization_config(
+    section: Mapping[str, Any],
+    defaults: DomainRandomizationConfig,
+) -> DomainRandomizationConfig:
+    return DomainRandomizationConfig(
+        enabled=bool(section.get("enabled", defaults.enabled)),
+        rs_scale_range=_as_float_pair(
+            section.get("rs_scale_range"),
+            default=defaults.rs_scale_range,
+        ),
+        ld_scale_range=_as_float_pair(
+            section.get("ld_scale_range"),
+            default=defaults.ld_scale_range,
+        ),
+        lq_scale_range=_as_float_pair(
+            section.get("lq_scale_range"),
+            default=defaults.lq_scale_range,
+        ),
+        psi_f_scale_range=_as_float_pair(
+            section.get("psi_f_scale_range"),
+            default=defaults.psi_f_scale_range,
+        ),
+        j_scale_range=_as_float_pair(
+            section.get("j_scale_range"),
+            default=defaults.j_scale_range,
+        ),
+        vdc_scale_range=_as_float_pair(
+            section.get("vdc_scale_range"),
+            default=defaults.vdc_scale_range,
+        ),
+        sigma_i_range=_as_float_pair(
+            section.get("sigma_i_range"),
+            default=defaults.sigma_i_range,
+        ),
+        sigma_omega_rpm_range=_as_float_pair(
+            section.get("sigma_omega_rpm_range"),
+            default=defaults.sigma_omega_rpm_range,
+        ),
+        load_torque_range=_as_float_pair(
+            section.get("load_torque_range"),
+            default=defaults.load_torque_range,
+        ),
+        load_change_interval_steps_range=_as_int_pair(
+            section.get("load_change_interval_steps_range"),
+            default=defaults.load_change_interval_steps_range,
+        ),
+    )
+
+
+def _parse_env_domain_randomization_config(data: dict[str, Any]) -> DomainRandomizationConfig:
+    defaults = DomainRandomizationConfig()
+    section = _as_mapping(data.get("domain_randomization"), name="domain_randomization")
+    return _build_domain_randomization_config(section, defaults)
+
+
+def _parse_train_domain_randomization_config(
+    data: dict[str, Any],
+) -> DomainRandomizationConfig | None:
+    if "domain_randomization" not in data:
+        return None
+    defaults = DomainRandomizationConfig()
+    section = _as_mapping(data.get("domain_randomization"), name="domain_randomization")
+    return _build_domain_randomization_config(section, defaults)
+
+
 def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
     defaults = PIConfig()
     return PIConfig(
@@ -440,6 +564,7 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
         save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
         reward=_parse_train_reward_config(data),
+        domain_randomization=_parse_train_domain_randomization_config(data),
     )
 
 
@@ -459,6 +584,7 @@ def parse_env_config(path: str | Path) -> EnvConfig:
         noise=_parse_noise_config(data),
         termination=_parse_termination_config(data),
         reward=_parse_env_reward_config(data),
+        domain_randomization=_parse_env_domain_randomization_config(data),
     )
 
 
@@ -480,3 +606,14 @@ def apply_train_reward_override(env_cfg: EnvConfig, train_cfg: TrainConfig) -> E
     if reward_override is None:
         return env_cfg
     return replace(env_cfg, reward=reward_override)
+
+
+def apply_train_domain_randomization_override(
+    env_cfg: EnvConfig,
+    train_cfg: TrainConfig,
+) -> EnvConfig:
+    """Return an env config with any training-only DR override applied."""
+    dr_override = getattr(train_cfg, "domain_randomization", None)
+    if dr_override is None:
+        return env_cfg
+    return replace(env_cfg, domain_randomization=dr_override)
