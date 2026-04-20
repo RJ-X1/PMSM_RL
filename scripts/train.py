@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 import argparse
 import csv
+import json
 from typing import Any
 
 import numpy as np
@@ -117,6 +118,32 @@ def _evaluate_policy(
     return float(sum(returns) / max(len(returns), 1))
 
 
+def _write_best_checkpoint_metadata(
+    path: Path,
+    *,
+    checkpoint_path: Path,
+    global_step: int,
+    metric_name: str,
+    metric_value: float | None,
+    agent_name: str,
+    env_id: str,
+    reward_mode: str,
+    selection_reason: str,
+) -> None:
+    """Write a compact JSON summary for the best checkpoint selection."""
+    payload = {
+        "checkpoint_path": str(checkpoint_path),
+        "global_step": int(global_step),
+        "metric_name": str(metric_name),
+        "metric_value": None if metric_value is None else float(metric_value),
+        "agent_name": str(agent_name),
+        "env_id": str(env_id),
+        "reward_mode": str(reward_mode),
+        "selection_reason": str(selection_reason),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     """Run TD3/DDPG training loop with replay, periodic checkpointing, and lightweight eval."""
     args = build_arg_parser().parse_args()
@@ -187,6 +214,9 @@ def main() -> None:
     )
 
     latest_ckpt = layout.checkpoints_dir / "checkpoint_latest.pt"
+    best_ckpt = layout.checkpoints_dir / "checkpoint_best.pt"
+    best_ckpt_meta = layout.run_dir / "best_checkpoint.json"
+    reward_mode = str(getattr(getattr(env_cfg, "reward", None), "mode", ""))
     obs, _info = env.reset(seed=int(env_cfg.seed))
     episode_idx = 0
     episode_steps = 0
@@ -195,6 +225,7 @@ def main() -> None:
     critic_losses: list[float] = []
     actor_update_counts: list[float] = []
     latest_eval_return: float | None = None
+    best_eval_return: float | None = None
     next_eval_step = int(eval_every_steps) if eval_every_steps is not None and eval_every_steps > 0 else None
     next_save_step = int(save_every_steps) if save_every_steps is not None and save_every_steps > 0 else None
 
@@ -261,6 +292,24 @@ def main() -> None:
                     f"eval algo={agent_name} step={global_step} "
                     f"episodes={eval_episodes} mean_return={latest_eval_return:.3f}"
                 )
+                if best_eval_return is None or float(latest_eval_return) > float(best_eval_return):
+                    best_eval_return = float(latest_eval_return)
+                    agent.save_checkpoint(best_ckpt)
+                    _write_best_checkpoint_metadata(
+                        best_ckpt_meta,
+                        checkpoint_path=best_ckpt,
+                        global_step=global_step,
+                        metric_name="mean_eval_return",
+                        metric_value=best_eval_return,
+                        agent_name=agent_name,
+                        env_id=str(env_cfg.env_id),
+                        reward_mode=reward_mode,
+                        selection_reason="periodic_eval_return_improved",
+                    )
+                    print(
+                        f"updated best checkpoint: {best_ckpt} "
+                        f"(mean_eval_return={best_eval_return:.3f}, step={global_step})"
+                    )
                 next_eval_step += int(eval_every_steps)
 
             saved_checkpoint = 0
@@ -333,6 +382,20 @@ def main() -> None:
             f.flush()
 
     agent.save_checkpoint(latest_ckpt)
+    if best_eval_return is None:
+        agent.save_checkpoint(best_ckpt)
+        _write_best_checkpoint_metadata(
+            best_ckpt_meta,
+            checkpoint_path=best_ckpt,
+            global_step=total_steps,
+            metric_name="mean_eval_return",
+            metric_value=None,
+            agent_name=agent_name,
+            env_id=str(env_cfg.env_id),
+            reward_mode=reward_mode,
+            selection_reason="fallback_latest_no_periodic_eval",
+        )
+        print(f"saved fallback best checkpoint: {best_ckpt}")
     print(f"saved final checkpoint: {latest_ckpt}")
 
 

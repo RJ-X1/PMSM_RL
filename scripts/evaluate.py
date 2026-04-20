@@ -38,6 +38,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-config", type=Path, default=DEFAULT_TRAIN_CONFIG_PATH)
     parser.add_argument("--pi-config", type=Path, default=DEFAULT_PI_CONFIG_PATH)
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--checkpoint-tag",
+        choices=("best", "latest"),
+        default="best",
+        help="Preferred RL checkpoint alias when --checkpoint is not provided.",
+    )
     parser.add_argument("--controller", choices=("rl", "pi"), default="rl")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
@@ -77,8 +83,12 @@ def _default_output_csv_path(train_cfg: Any, controller_name: str) -> Path:
     return layout.eval_dir / f"eval_{controller_name}.csv"
 
 
-def _default_checkpoint_path(train_cfg: Any) -> Path:
+def _default_checkpoint_path(train_cfg: Any, *, tag: str = "best") -> Path:
     layout = ensure_run_layout(make_run_layout(train_cfg.run_name, train_cfg.output_dir))
+    if str(tag) == "best":
+        best_path = layout.checkpoints_dir / "checkpoint_best.pt"
+        if best_path.exists():
+            return best_path
     return layout.checkpoints_dir / "checkpoint_latest.pt"
 
 
@@ -89,6 +99,7 @@ def run_evaluation(
     pi_config_path: Path,
     controller_name: str,
     checkpoint_path: Path | None,
+    checkpoint_tag: str,
     max_steps_override: int | None,
     output_csv_path: Path | None,
     seed_override: int | None = None,
@@ -133,7 +144,7 @@ def run_evaluation(
             action_low=action_low,
             action_high=action_high,
         )
-        resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg)
+        resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg, tag=checkpoint_tag)
         agent.load_checkpoint(resolved_checkpoint)
 
         def policy_fn(policy_obs: np.ndarray) -> np.ndarray:
@@ -230,6 +241,7 @@ def run_evaluation(
         "done_reason": final_done_reason or "not_done",
         "output_csv": final_output_csv,
         "checkpoint_path": resolved_checkpoint,
+        "checkpoint_tag": None if controller_name != "rl" else str(checkpoint_tag),
         "seed": eval_seed,
         "terminated": int(bool(terminated)),
         "truncated": int(bool(truncated)),
@@ -245,6 +257,7 @@ def main() -> None:
         pi_config_path=args.pi_config,
         controller_name=str(args.controller),
         checkpoint_path=args.checkpoint,
+        checkpoint_tag=str(args.checkpoint_tag),
         max_steps_override=args.max_steps,
         output_csv_path=args.output_csv,
         seed_override=args.seed,
@@ -253,7 +266,8 @@ def main() -> None:
         f"controller={result['controller']} agent={result['agent_name']} "
         f"env_id={result['env_id']} layout={result['layout']} "
         f"episode_return={result['episode_return']:.3f} steps={result['steps']} "
-        f"done_reason={result['done_reason']} csv={result['output_csv']}"
+        f"done_reason={result['done_reason']} checkpoint={result['checkpoint_path']} "
+        f"csv={result['output_csv']}"
     )
 
 
