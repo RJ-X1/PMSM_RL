@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 import argparse
 import csv
 
-from scripts.evaluate import run_evaluation
+from scripts.core.evaluate import run_evaluation
 from utils.config import parse_env_config
 from utils.metrics import (
     aggregate_repeated_eval_summaries,

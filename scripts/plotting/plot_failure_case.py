@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 import argparse
 import csv
 
-from scripts.plot_episode_trace import SUPPORTED_TASKS, create_episode_trace_plot
+from scripts.plotting.plot_episode_trace import SUPPORTED_TASKS, create_episode_trace_plot
 from utils.run_layout import infer_run_dir_from_path
 
 
