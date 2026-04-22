@@ -65,6 +65,7 @@ def main() -> None:
     obs_dim = int(wrapped_env.observation_space.shape[0])
     act_dim = int(wrapped_env.action_space.shape[0])
     spec = build_observation_spec(env_id=env_cfg.env_id, env=wrapped_env)
+    base_env = getattr(wrapped_env, "unwrapped", wrapped_env)
     env_details = introspect_env(raw_env)
     first_values = np.asarray(flat_obs).reshape(-1)[: min(12, obs_dim)].astype(float).tolist()
     preview_action = np.zeros((act_dim,), dtype=np.float32)
@@ -93,6 +94,8 @@ def main() -> None:
         "inferred_layout": spec.layout,
         "signal_names": spec.signal_names,
         "action_names": spec.action_names,
+        "observation_is_normalized": bool(getattr(base_env, "observation_is_normalized", False)),
+        "observation_normalization_scales": getattr(base_env, "observation_normalization_scales", None),
         "named_observation_preview": named_obs,
         "step_action_preview": preview_action.astype(float).tolist(),
         "step_reward": float(step_reward),
@@ -128,6 +131,8 @@ def main() -> None:
     print(f"inferred_layout: {summary['inferred_layout']}")
     print(f"signal_names: {summary['signal_names']}")
     print(f"action_names: {summary['action_names']}")
+    print(f"observation_is_normalized: {summary['observation_is_normalized']}")
+    print(f"observation_normalization_scales: {summary['observation_normalization_scales']}")
     print("named_observation_preview:")
     print(json.dumps(summary["named_observation_preview"], indent=2, ensure_ascii=False))
     print(f"step_action_preview: {summary['step_action_preview']}")

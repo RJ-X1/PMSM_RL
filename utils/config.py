@@ -244,15 +244,15 @@ class EnvConfig:
 class PIConfig:
     """PI-controller configuration for dq current-control baselines."""
 
-    kp_d: float = 6.0
-    ki_d: float = 800.0
-    kp_q: float = 6.0
-    ki_q: float = 800.0
+    kp_d: float = 8.80
+    ki_d: float = 1099.0
+    kp_q: float = 10.05
+    ki_q: float = 1099.0
     integrator_limit_d: float = 120.0
     integrator_limit_q: float = 120.0
     voltage_limit: float | None = None
     action_limit: float = 1.0
-    anti_windup: str = "conditional_integration"
+    anti_windup: str = "clamping"
     use_resistance_compensation: bool = True
     use_decoupling: bool = True
     use_back_emf_compensation: bool = True

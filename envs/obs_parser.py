@@ -32,6 +32,8 @@ CUSTOM_OBSERVATION_NAMES = (
     "T_L",
 )
 CUSTOM_ACTION_NAMES = ("act_u_d", "act_u_q")
+# The custom PMSM environment keeps these fixed signal names but exposes them
+# as normalized observation values for RL-facing code.
 
 ABC_STATE_NAMES = [
     "omega",

@@ -10,20 +10,23 @@ import numpy as np
 from envs.motor_model import PMSMMotorParams, clip_voltage_vector
 from envs.obs_parser import resolve_signal_indices
 
+CUSTOM_OBS_OMEGA_BASE_RPM = 2200.0
+CUSTOM_OBS_OMEGA_BASE_RAD_PER_SEC = float(CUSTOM_OBS_OMEGA_BASE_RPM * (2.0 * np.pi / 60.0))
+
 
 @dataclass(slots=True)
 class PIControllerConfig:
     """Tunable PI gains and limits for dq current control."""
 
-    kp_d: float = 6.0
-    ki_d: float = 800.0
-    kp_q: float = 6.0
-    ki_q: float = 800.0
+    kp_d: float = 8.80
+    ki_d: float = 1099.0
+    kp_q: float = 10.05
+    ki_q: float = 1099.0
     integrator_limit_d: float = 120.0
     integrator_limit_q: float = 120.0
     voltage_limit: float | None = None
     action_limit: float = 1.0
-    anti_windup: str = "conditional_integration"
+    anti_windup: str = "clamping"
     use_resistance_compensation: bool = True
     use_decoupling: bool = True
     use_back_emf_compensation: bool = True
@@ -48,7 +51,7 @@ class PICurrentController:
         self.signal_names = list(signal_names or [])
         self.config = config or PIControllerConfig()
         self.motor_params = motor_params
-        self._anti_windup_mode = str(self.config.anti_windup).strip().lower()
+        self._anti_windup_mode = self._normalize_anti_windup_mode(self.config.anti_windup)
         if self._anti_windup_mode not in {"none", "clamp", "conditional", "conditional_integration"}:
             raise ValueError(f"Unsupported anti_windup mode: {self.config.anti_windup}")
 
@@ -59,6 +62,19 @@ class PICurrentController:
         self._required_indices = resolve_signal_indices(self.signal_names, required_signals)
         self._integrator_d = 0.0
         self._integrator_q = 0.0
+
+    @staticmethod
+    def _normalize_anti_windup_mode(value: str) -> str:
+        """Map user-facing anti-windup labels onto the controller implementation."""
+        mode = str(value).strip().lower()
+        aliases = {
+            "none": "none",
+            "clamp": "clamp",
+            "clamping": "clamp",
+            "conditional": "conditional",
+            "conditional_integration": "conditional_integration",
+        }
+        return aliases.get(mode, mode)
 
     def _resolve_mode(self) -> str:
         signal_set = set(str(name) for name in self.signal_names)
@@ -97,6 +113,20 @@ class PICurrentController:
         if self.mode == "custom_dq" and self.motor_params is not None:
             return float(self.motor_params.Umax)
         return 1.0
+
+    def _custom_current_scale(self) -> float:
+        if self.motor_params is None:
+            raise ValueError("Custom dq PI controller requires motor_params for normalized observations")
+        return max(float(self.motor_params.Imax), 1e-6)
+
+    def _read_custom_physical_signal(self, obs: np.ndarray, signal_name: str) -> float:
+        """Convert normalized custom-env observation signals back to physical units."""
+        value = self._read_required_signal(obs, signal_name)
+        if signal_name in {"i_d", "i_q", "ref_i_d", "ref_i_q"}:
+            return float(value) * self._custom_current_scale()
+        if signal_name == "omega_m":
+            return float(value) * float(CUSTOM_OBS_OMEGA_BASE_RAD_PER_SEC)
+        return float(value)
 
     def _candidate_integrators(self, *, error_d: float, error_q: float, dt: float) -> tuple[float, float]:
         candidate_d = self._integrator_d + float(self.config.ki_d) * float(error_d) * float(dt)
@@ -208,11 +238,11 @@ class PICurrentController:
         )
 
     def _compute_custom_action(self, obs: np.ndarray) -> np.ndarray:
-        i_d = self._read_required_signal(obs, "i_d")
-        i_q = self._read_required_signal(obs, "i_q")
-        ref_i_d = self._read_required_signal(obs, "ref_i_d")
-        ref_i_q = self._read_required_signal(obs, "ref_i_q")
-        omega_m = self._read_required_signal(obs, "omega_m")
+        i_d = self._read_custom_physical_signal(obs, "i_d")
+        i_q = self._read_custom_physical_signal(obs, "i_q")
+        ref_i_d = self._read_custom_physical_signal(obs, "ref_i_d")
+        ref_i_q = self._read_custom_physical_signal(obs, "ref_i_q")
+        omega_m = self._read_custom_physical_signal(obs, "omega_m")
 
         error_d = float(ref_i_d) - float(i_d)
         error_q = float(ref_i_q) - float(i_q)

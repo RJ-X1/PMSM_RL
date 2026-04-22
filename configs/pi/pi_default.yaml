@@ -1,9 +1,9 @@
 # Paper-style dq-axis PI baseline defaults for the custom PMSM environment.
 
-kp_d: 6.0
-ki_d: 800.0
-kp_q: 6.0
-ki_q: 800.0
+kp_d: 8.80
+ki_d: 1099.0
+kp_q: 10.05
+ki_q: 1099.0
 
 # Integral contribution limits in volts.
 integrator_limit_d: 120.0
@@ -13,8 +13,8 @@ integrator_limit_q: 120.0
 voltage_limit: null
 action_limit: 1.0
 
-# Options: conditional_integration, clamp, none
-anti_windup: conditional_integration
+# Options: clamping, clamp, conditional_integration, none
+anti_windup: clamping
 
 use_resistance_compensation: true
 use_decoupling: true

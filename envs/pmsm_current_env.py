@@ -18,12 +18,18 @@ from envs.motor_model import (
     rk4_step,
 )
 
+CUSTOM_OBS_OMEGA_BASE_RPM = 2200.0
+CUSTOM_OBS_OMEGA_BASE_RAD_PER_SEC = float(CUSTOM_OBS_OMEGA_BASE_RPM * (2.0 * np.pi / 60.0))
+CUSTOM_OBS_LOAD_TORQUE_BASE = 5.0
+
 
 class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
     """Paper-style PMSM dq current-control environment with a fixed flat observation.
 
     The observation always follows:
     ``[i_d, i_q, omega_m, ref_i_d, ref_i_q, e_d, e_q, prev_u_d, prev_u_q, T_L]``
+    and is normalized for the RL agent while the internal physics remain in
+    physical units.
 
     The action is a normalized dq voltage command:
     ``[a_d, a_q] in [-1, 1]^2``.
@@ -144,6 +150,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.observation_names = list(self.OBSERVATION_NAMES)
         self.action_names = list(self.ACTION_NAMES)
         self.reward_term_names = list(self.REWARD_TERM_NAMES)
+        self.observation_is_normalized = True
 
         self.action_space = gym.spaces.Box(
             low=-1.0,
@@ -165,6 +172,17 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.next_load_change_step: int | None = None
         self.last_randomization_sample: dict[str, float | bool | int] = {}
         self.elapsed_steps = 0
+
+    @property
+    def observation_normalization_scales(self) -> dict[str, float]:
+        """Return the active observation scales used at the RL interface."""
+        return {
+            "current": max(float(self.motor_params.Imax), 1e-6),
+            "omega_m_rpm": float(CUSTOM_OBS_OMEGA_BASE_RPM),
+            "omega_m_rad_per_sec": float(CUSTOM_OBS_OMEGA_BASE_RAD_PER_SEC),
+            "voltage": max(float(self.motor_params.Umax), 1e-6),
+            "load_torque": float(CUSTOM_OBS_LOAD_TORQUE_BASE),
+        }
 
     @staticmethod
     def _as_range(values: Iterable[float], *, default: tuple[float, float]) -> tuple[float, float]:
@@ -384,18 +402,23 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         i_d, i_q, omega_m = self._measured_state()
         e_d = float(self.ref_i_d) - i_d
         e_q = float(self.ref_i_q) - i_q
+        scales = self.observation_normalization_scales
+        current_scale = float(scales["current"])
+        omega_scale = float(scales["omega_m_rad_per_sec"])
+        voltage_scale = float(scales["voltage"])
+        load_scale = float(scales["load_torque"])
         obs = np.asarray(
             [
-                i_d,
-                i_q,
-                omega_m,
-                self.ref_i_d,
-                self.ref_i_q,
-                e_d,
-                e_q,
-                self.prev_u_dq[0],
-                self.prev_u_dq[1],
-                self.load_torque,
+                i_d / current_scale,
+                i_q / current_scale,
+                omega_m / omega_scale,
+                self.ref_i_d / current_scale,
+                self.ref_i_q / current_scale,
+                e_d / current_scale,
+                e_q / current_scale,
+                self.prev_u_dq[0] / voltage_scale,
+                self.prev_u_dq[1] / voltage_scale,
+                self.load_torque / load_scale,
             ],
             dtype=np.float32,
         )
@@ -412,6 +435,7 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "reward_mode": self.reward_mode,
             "action_smoothness_enabled": bool(self.action_smoothness_enabled),
             "action_smoothness_weight": float(self.action_smoothness_weight),
+            "observation_is_normalized": bool(self.observation_is_normalized),
             "domain_randomization_active": bool(self.last_randomization_sample.get("domain_randomization_active", False)),
             "elapsed_steps": int(self.elapsed_steps),
             "i_d": float(self.state.i_d),
@@ -433,6 +457,13 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "active_J": float(self.motor_params.J),
             "active_Vdc": float(self.motor_params.Vdc),
             "active_Umax": float(self.motor_params.Umax),
+            "observation_current_scale": float(self.observation_normalization_scales["current"]),
+            "observation_speed_scale_rpm": float(self.observation_normalization_scales["omega_m_rpm"]),
+            "observation_speed_scale_rad_per_sec": float(
+                self.observation_normalization_scales["omega_m_rad_per_sec"]
+            ),
+            "observation_voltage_scale": float(self.observation_normalization_scales["voltage"]),
+            "observation_load_torque_scale": float(self.observation_normalization_scales["load_torque"]),
             "current_measurement_noise_std": float(self.current_measurement_noise_std),
             "speed_measurement_noise_std": float(self.speed_measurement_noise_std),
             "speed_measurement_noise_rpm": float(
