@@ -167,7 +167,7 @@ def rk4_step(
 
     dt_value = float(params.Ts if dt is None else dt)
     y0 = state.as_array(dtype=np.float64)
-    u_vec = np.asarray(list(u_dq), dtype=np.float64).reshape(2)
+    u_vec = clip_voltage_vector(u_dq, limit=float(params.Umax))
     load_torque_value = float(load_torque)
 
     def _f(y: np.ndarray) -> np.ndarray:
