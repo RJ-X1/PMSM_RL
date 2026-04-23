@@ -1,3 +1,5 @@
+"""Backward-compatible wrapper for the canonical training CLI."""
+
 from pathlib import Path
 import sys
 

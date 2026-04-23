@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -20,7 +20,11 @@ from utils.metrics import (
     select_best_checkpoint_aggregate,
     summarize_eval_csv,
 )
-from utils.experiment_factory import DEFAULT_ENV_CONFIG_PATH, DEFAULT_TRAIN_CONFIG_PATH
+from utils.experiment_factory import (
+    DEFAULT_ENV_CONFIG_PATH,
+    DEFAULT_PI_CONFIG_PATH,
+    DEFAULT_TRAIN_CONFIG_PATH,
+)
 from utils.run_layout import ensure_run_layout, make_run_layout
 
 
@@ -99,8 +103,10 @@ def main() -> None:
             eval_result = run_evaluation(
                 env_config_path=args.env_config,
                 train_config_path=args.train_config,
+                pi_config_path=DEFAULT_PI_CONFIG_PATH,
                 controller_name="rl",
                 checkpoint_path=checkpoint_path,
+                checkpoint_tag="best",
                 max_steps_override=args.max_steps,
                 output_csv_path=eval_csv_path,
                 seed_override=eval_seed,
