@@ -1,0 +1,110 @@
+scenario_set_name: pmsm_current_control_step4_tests
+
+test_scenarios:
+  - id: test_1_nominal_step_tracking
+    name: Test-1
+    description: nominal step tracking
+    reference_profile: step
+    reference:
+      i_d_initial: 0.0
+      i_q_initial: 0.0
+      i_d_final: -3.0
+      i_q_final: 10.0
+    omega_m_rpm: 1000.0
+    load_torque_nm: 1.0
+
+  - id: test_2_mixed_reference_tracking
+    name: Test-2
+    description: mixed reference tracking
+    reference_profile: mixed_step_ramp_sinusoidal
+    reference_ranges:
+      i_d_range: [-6.0, 0.0]
+      i_q_range: [-15.0, 15.0]
+    omega_m_rpm: 1000.0
+    load_torque_nm: 1.0
+
+  - id: test_3_speed_change_robustness
+    name: Test-3
+    description: speed-change robustness
+    reference_profile: step
+    reference:
+      i_d_initial: 0.0
+      i_q_initial: 0.0
+      i_d_final: -3.0
+      i_q_final: 10.0
+    speed_rpm_profile: [300.0, 1800.0]
+    load_torque_nm: 1.0
+
+  - id: test_4_load_disturbance_robustness
+    name: Test-4
+    description: load-disturbance robustness
+    reference_profile: step
+    reference:
+      i_d_initial: 0.0
+      i_q_initial: 0.0
+      i_d_final: -3.0
+      i_q_final: 10.0
+    omega_m_rpm: 1000.0
+    load_torque_nm_profile: [0.5, 3.0]
+
+  - id: test_5_parameter_mismatch
+    name: Test-5
+    description: parameter mismatch
+    reference_profile: step
+    reference:
+      i_d_initial: 0.0
+      i_q_initial: 0.0
+      i_d_final: -3.0
+      i_q_final: 10.0
+    omega_m_rpm: 1000.0
+    load_torque_nm: 1.0
+    parameter_scales:
+      Rs: 1.20
+      Ld: 0.90
+      Lq: 1.10
+      psi_f: 0.95
+      J: 1.00
+
+  - id: test_6_noise_and_delay
+    name: Test-6
+    description: noise and delay
+    reference_profile: step
+    reference:
+      i_d_initial: 0.0
+      i_q_initial: 0.0
+      i_d_final: -3.0
+      i_q_final: 10.0
+    omega_m_rpm: 1000.0
+    load_torque_nm: 1.0
+    observation_noise_std: 0.02
+    speed_noise_rpm: 20.0
+    action_delay_steps: 1
+
+  - id: test_7_unseen_high_speed
+    name: Test-7
+    description: unseen high-speed test
+    reference_profile: sinusoidal
+    reference_ranges:
+      i_d_range: [0.0, 0.0]
+      i_q_range: [-8.0, 8.0]
+    omega_m_rpm: 2200.0
+    load_torque_nm: 1.0
+
+  - id: test_8_combined_stress
+    name: Test-8
+    description: combined stress test
+    reference_profile: mixed_step_ramp_sinusoidal
+    reference_ranges:
+      i_d_range: [-6.0, 0.0]
+      i_q_range: [-15.0, 15.0]
+    speed_rpm_profile: [1500.0, 2000.0]
+    load_torque_nm_profile: [1.0, 3.0]
+    parameter_scales:
+      Rs: 1.15
+      Ld: 0.92
+      Lq: 1.08
+      psi_f: 0.96
+      J: 1.05
+    observation_noise_std: 0.02
+    speed_noise_rpm: 20.0
+    action_delay_steps: 1

@@ -1,0 +1,155 @@
+schema_name: pmsm_current_control_metric_plot_contract_v1
+
+contract_notes:
+  primary_standard: Canonical metadata and canonical metrics below are the official project-wide field names.
+  compatibility_policy: Legacy aliases may still be emitted for older scripts, but they are compatibility-only and should not be used as the main contract.
+  paper_figure_data_rule: Final paper figures and final quantitative tables should be generated from CSVs re-exported by scripts/core/evaluate.py rather than older legacy CSVs with inconsistent column naming.
+  canonical_export_pipeline: scripts/core/evaluate.py
+
+canonical_metadata:
+  scenario:
+    meaning: Explicit evaluation scenario or test-case label stored in each exported evaluation trace
+    objective: categorical
+
+canonical_metrics:
+  rmse_i_d:
+    meaning: RMS d-axis current tracking error [A]
+    objective: lower_better
+  rmse_i_q:
+    meaning: RMS q-axis current tracking error [A]
+    objective: lower_better
+  rmse_all:
+    meaning: Combined RMS tracking error across tracked current axes [A]
+    objective: lower_better
+  mae_i_d:
+    meaning: Mean absolute d-axis current tracking error [A]
+    objective: lower_better
+  mae_i_q:
+    meaning: Mean absolute q-axis current tracking error [A]
+    objective: lower_better
+  mae_all:
+    meaning: Combined mean absolute tracking error across tracked current axes [A]
+    objective: lower_better
+  iae_i_d:
+    meaning: Integral of absolute d-axis current tracking error [A*s]
+    objective: lower_better
+  iae_i_q:
+    meaning: Integral of absolute q-axis current tracking error [A*s]
+    objective: lower_better
+  iae_all:
+    meaning: Sum of per-axis integrated absolute current-tracking errors [A*s]
+    objective: lower_better
+  max_abs_error_i_d:
+    meaning: Maximum absolute d-axis current tracking error [A]
+    objective: lower_better
+  max_abs_error_i_q:
+    meaning: Maximum absolute q-axis current tracking error [A]
+    objective: lower_better
+  max_abs_error_all:
+    meaning: Maximum absolute tracking error across tracked current axes [A]
+    objective: lower_better
+  overshoot_i_d:
+    meaning: d-axis step overshoot in the excursion direction [A]; NaN when not step-like
+    objective: lower_better
+  overshoot_i_q:
+    meaning: q-axis step overshoot in the excursion direction [A]; NaN when not step-like
+    objective: lower_better
+  settling_time_i_d:
+    meaning: First d-axis settling time within a +/-2% band [s]; NaN when not step-like
+    objective: lower_better
+  settling_time_i_q:
+    meaning: First q-axis settling time within a +/-2% band [s]; NaN when not step-like
+    objective: lower_better
+  control_energy:
+    meaning: Sum of squared applied dq voltages integrated over time [V^2*s]
+    objective: lower_better
+  action_delta_energy:
+    meaning: Sum of squared applied dq-voltage increments integrated over time
+    objective: lower_better
+  saturation_count:
+    meaning: Number of evaluation steps where voltage-vector saturation was active
+    objective: lower_better
+  episode_return:
+    meaning: Cumulative episode reward
+    objective: higher_better
+  episode_length:
+    meaning: Number of exported evaluation steps
+    objective: higher_better
+  terminated:
+    meaning: Whether the episode ended via environment termination
+    objective: lower_better
+  truncated:
+    meaning: Whether the episode ended via truncation or episode limit
+    objective: lower_better
+  done_reason:
+    meaning: Final termination or truncation reason label
+    objective: categorical
+
+compatibility_aliases:
+  steps: episode_length
+  max_abs_err_i_d: max_abs_error_i_d
+  max_abs_err_i_q: max_abs_error_i_q
+  max_abs_err_all: max_abs_error_all
+  rmse_id: rmse_i_d
+  rmse_iq: rmse_i_q
+  rmse: rmse_all
+  mae_id: mae_i_d
+  mae_iq: mae_i_q
+  iae: iae_all
+  max_abs_error: max_abs_error_all
+  action_smoothness: action_delta_energy
+
+compatibility_notes:
+  - done remains available as a convenience flag derived from terminated or truncated.
+
+standard_figures:
+  training_curve:
+    generator: scripts/plotting/paper_figures.py::training_dashboard
+    input_schema:
+      kind: training_log_csv
+      required_columns: [episode, episode_return, global_steps, avg_actor_loss, avg_critic_loss]
+    default_output: outputs/paper/figures/training_curve.png
+  nominal_waveform:
+    generator: scripts/plotting/paper_figures.py::nominal_waveforms
+    input_schema:
+      kind: evaluation_trace_csv
+      required_columns: [time_s, i_d_phys, ref_i_d_phys, i_q_phys, ref_i_q_phys, u_d, u_q]
+      preferred_source: scripts/core/evaluate.py
+    default_output: outputs/paper/figures/nominal_waveforms.png
+  event_response:
+    generator: scripts/plotting/paper_figures.py::event_response
+    input_schema:
+      kind: evaluation_trace_csv
+      required_columns: [time_s, i_q_phys, ref_i_q_phys, u_q]
+      preferred_source: scripts/core/evaluate.py
+    default_output: outputs/paper/figures/event_response.png
+  checkpoint_comparison:
+    generator: scripts/plotting/plot_checkpoint_sweep.py
+    input_schema:
+      kind: checkpoint_aggregate_summary_csv
+      required_columns: [checkpoint_path, success_rate, mean_mae_all]
+    default_output: outputs/paper/figures/checkpoint_sweep.png
+  robustness_distribution:
+    generator: scripts/plotting/paper_figures.py::robustness_distribution
+    input_schema:
+      kind: paper_summary_csv
+      required_columns: [method, scenario, rmse_all]
+    default_output: outputs/paper/figures/robustness_distribution.png
+  performance_heatmap:
+    generator: scripts/plotting/paper_figures.py::performance_heatmap
+    input_schema:
+      kind: paper_summary_csv
+      required_columns: [method, speed_marker, load_marker, rmse_all]
+    default_output: outputs/paper/figures/performance_heatmap.png
+  pareto_tradeoff:
+    generator: scripts/plotting/paper_figures.py::pareto_front
+    input_schema:
+      kind: paper_summary_csv
+      required_columns: [method, rmse_all, control_energy]
+    default_output: outputs/paper/figures/pareto_front.png
+  ablation:
+    generator: scripts/plotting/paper_figures.py::ablation_waterfall
+    input_schema:
+      kind: paper_summary_csv
+      required_columns: [method, rmse_all]
+    default_output: outputs/paper/figures/ablation_waterfall.png
