@@ -3,3 +3,4 @@ max_steps: null
 seed: null
 num_repeats: 3
 task_name: pmsm_current_control
+test_conditions_path: configs/eval/pmsm_test_conditions.yaml

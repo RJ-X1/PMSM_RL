@@ -237,7 +237,7 @@ class PICurrentController:
             dtype=np.float64,
         )
 
-    def _compute_custom_action(self, obs: np.ndarray) -> np.ndarray:
+    def _compute_custom_voltage_dq(self, obs: np.ndarray) -> np.ndarray:
         i_d = self._read_custom_physical_signal(obs, "i_d")
         i_q = self._read_custom_physical_signal(obs, "i_q")
         ref_i_d = self._read_custom_physical_signal(obs, "ref_i_d")
@@ -253,6 +253,28 @@ class PICurrentController:
             dt=float(self.motor_params.Ts if self.motor_params is not None else 1e-4),
             feedforward_dq=feedforward_dq,
         )
+        return u_dq
+
+    def compute_voltage_dq(self, obs: np.ndarray) -> np.ndarray:
+        """Compute the saturated physical dq voltage command for custom-env observations."""
+        if self.mode != "custom_dq":
+            raise ValueError("compute_voltage_dq is only available for the custom dq controller mode")
+
+        x = np.asarray(obs, dtype=np.float32).reshape(-1)
+        if x.size == 0:
+            raise ValueError("Observation vector is empty")
+        if not np.isfinite(x).all():
+            self.reset()
+            return np.zeros((2,), dtype=np.float64)
+
+        u_dq = self._compute_custom_voltage_dq(x)
+        if not np.isfinite(u_dq).all():
+            self.reset()
+            return np.zeros((2,), dtype=np.float64)
+        return u_dq.astype(np.float64, copy=False)
+
+    def _compute_custom_action(self, obs: np.ndarray) -> np.ndarray:
+        u_dq = self._compute_custom_voltage_dq(obs)
         voltage_limit = max(self._resolve_voltage_limit(), 1e-6)
         action = np.clip(u_dq / voltage_limit, -float(self.config.action_limit), float(self.config.action_limit))
         return action.astype(np.float32, copy=False)

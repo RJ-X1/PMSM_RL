@@ -8,6 +8,8 @@ import re
 import numpy as np
 import pandas as pd
 
+from utils.metrics import summarize_eval_csv
+
 
 COLUMN_ALIASES = {
     "step": ["global_steps", "global_step", "step", "steps", "episode_steps"],
@@ -15,14 +17,14 @@ COLUMN_ALIASES = {
     "method": ["method", "controller", "agent", "algo", "algorithm", "variant"],
     "seed": ["seed", "random_seed", "run_seed"],
     "scenario": ["scenario", "test_case", "case", "condition", "done_reason"],
-    "speed": ["speed_rpm", "omega_rpm", "omega_me_rpm", "omega_m", "omega"],
-    "load": ["load_nm", "torque_load_nm", "load_torque_nm", "load_torque", "T_L", "torque"],
-    "i_d": ["i_d", "id", "id_actual", "i_d_meas"],
-    "i_q": ["i_q", "iq", "iq_actual", "i_q_meas"],
-    "i_d_ref": ["ref_i_d", "i_d_ref", "id_ref", "i_d_star", "id_star"],
-    "i_q_ref": ["ref_i_q", "i_q_ref", "iq_ref", "i_q_star", "iq_star"],
-    "u_d": ["act_u_d", "u_d", "ud", "v_d", "u_d_cmd", "prev_u_d"],
-    "u_q": ["act_u_q", "u_q", "uq", "v_q", "u_q_cmd", "prev_u_q"],
+    "speed": ["speed_rpm", "omega_m_rpm", "omega_rpm", "omega_me_rpm", "omega_m_phys", "omega_m", "omega"],
+    "load": ["load_torque_nm", "load_nm", "torque_load_nm", "load_torque_nm", "load_torque", "T_L", "torque"],
+    "i_d": ["i_d_phys", "i_d", "id", "id_actual", "i_d_meas"],
+    "i_q": ["i_q_phys", "i_q", "iq", "iq_actual", "i_q_meas"],
+    "i_d_ref": ["ref_i_d_phys", "ref_i_d", "i_d_ref", "id_ref", "i_d_star", "id_star"],
+    "i_q_ref": ["ref_i_q_phys", "ref_i_q", "i_q_ref", "iq_ref", "i_q_star", "iq_star"],
+    "u_d": ["u_d", "ud", "v_d", "u_d_cmd", "prev_u_d", "act_u_d"],
+    "u_q": ["u_q", "uq", "v_q", "u_q_cmd", "prev_u_q", "act_u_q"],
 }
 
 
@@ -85,35 +87,10 @@ def add_metadata(df: pd.DataFrame, path: str | Path) -> pd.DataFrame:
 
 def summarize_one(path: str, scenario_override: str | None) -> dict[str, float | str | int]:
     df = add_metadata(pd.read_csv(path), path)
-    step_col = maybe_resolve_column(df, "step")
-    time_col = maybe_resolve_column(df, "time")
-    i_d_col = resolve_column(df, "i_d")
-    i_q_col = resolve_column(df, "i_q")
-    i_d_ref_col = resolve_column(df, "i_d_ref")
-    i_q_ref_col = resolve_column(df, "i_q_ref")
-    u_d_col = resolve_column(df, "u_d")
-    u_q_col = resolve_column(df, "u_q")
     speed_col = maybe_resolve_column(df, "speed")
     load_col = maybe_resolve_column(df, "load")
     scenario_col = maybe_resolve_column(df, "scenario")
-
-    if time_col is not None and len(df) > 1:
-        axis = df[time_col].to_numpy(dtype=float)
-        dt = float(np.mean(np.diff(axis)))
-    elif step_col is not None and len(df) > 1:
-        axis = df[step_col].to_numpy(dtype=float)
-        dt = float(np.mean(np.diff(axis)))
-    else:
-        dt = 1.0
-
-    e_d = df[i_d_ref_col].to_numpy(dtype=float) - df[i_d_col].to_numpy(dtype=float)
-    e_q = df[i_q_ref_col].to_numpy(dtype=float) - df[i_q_col].to_numpy(dtype=float)
-    u_d = df[u_d_col].to_numpy(dtype=float)
-    u_q = df[u_q_col].to_numpy(dtype=float)
-    err_norm = np.sqrt(e_d ** 2 + e_q ** 2)
-    delta_u = np.sqrt(np.diff(u_d, prepend=u_d[0]) ** 2 + np.diff(u_q, prepend=u_q[0]) ** 2)
-    sat_threshold = 0.98 * max(float(np.max(np.abs(u_d))), float(np.max(np.abs(u_q))), 1e-8)
-    saturation_count = int(np.sum((np.abs(u_d) >= sat_threshold) | (np.abs(u_q) >= sat_threshold)))
+    metric_summary = summarize_eval_csv(path)
 
     scenario = scenario_override
     if scenario is None and scenario_col is not None:
@@ -121,25 +98,52 @@ def summarize_one(path: str, scenario_override: str | None) -> dict[str, float |
     if scenario is None:
         scenario = "default"
 
-    return {
+    canonical_row = {
         "source": path,
         "method": str(df["method"].iloc[0]),
         "seed": int(df["seed"].iloc[0]),
         "scenario": scenario,
         "speed_marker": float(df[speed_col].mean()) if speed_col is not None else float("nan"),
         "load_marker": float(df[load_col].mean()) if load_col is not None else float("nan"),
-        "rmse_id": float(np.sqrt(np.mean(e_d ** 2))),
-        "rmse_iq": float(np.sqrt(np.mean(e_q ** 2))),
-        "rmse": float(np.sqrt(np.mean(err_norm ** 2))),
-        "mae_id": float(np.mean(np.abs(e_d))),
-        "mae_iq": float(np.mean(np.abs(e_q))),
-        "iae": float(np.sum(np.abs(err_norm)) * dt),
-        "max_abs_error": float(np.max(np.abs(err_norm))),
-        "control_energy": float(np.sum(u_d ** 2 + u_q ** 2) * dt),
-        "action_smoothness": float(np.sum(delta_u ** 2) * dt),
-        "saturation_count": saturation_count,
-        "steps": int(len(df)),
+        "rmse_i_d": float(metric_summary.get("rmse_i_d", float("nan"))),
+        "rmse_i_q": float(metric_summary.get("rmse_i_q", float("nan"))),
+        "rmse_all": float(metric_summary.get("rmse_all", float("nan"))),
+        "mae_i_d": float(metric_summary.get("mae_i_d", float("nan"))),
+        "mae_i_q": float(metric_summary.get("mae_i_q", float("nan"))),
+        "mae_all": float(metric_summary.get("mae_all", float("nan"))),
+        "iae_i_d": float(metric_summary.get("iae_i_d", float("nan"))),
+        "iae_i_q": float(metric_summary.get("iae_i_q", float("nan"))),
+        "iae_all": float(metric_summary.get("iae_all", float("nan"))),
+        "max_abs_error_i_d": float(metric_summary.get("max_abs_error_i_d", float("nan"))),
+        "max_abs_error_i_q": float(metric_summary.get("max_abs_error_i_q", float("nan"))),
+        "max_abs_error_all": float(metric_summary.get("max_abs_error_all", float("nan"))),
+        "overshoot_i_d": float(metric_summary.get("overshoot_i_d", float("nan"))),
+        "overshoot_i_q": float(metric_summary.get("overshoot_i_q", float("nan"))),
+        "settling_time_i_d": float(metric_summary.get("settling_time_i_d", float("nan"))),
+        "settling_time_i_q": float(metric_summary.get("settling_time_i_q", float("nan"))),
+        "control_energy": float(metric_summary.get("control_energy", float("nan"))),
+        "action_delta_energy": float(metric_summary.get("action_delta_energy", float("nan"))),
+        "saturation_count": metric_summary.get("saturation_count", float("nan")),
+        "episode_return": float(metric_summary.get("episode_return", float("nan"))),
+        "episode_length": int(metric_summary.get("episode_length", len(df))),
+        "terminated": int(metric_summary.get("terminated", 0)),
+        "truncated": int(metric_summary.get("truncated", 0)),
+        "done_reason": str(metric_summary.get("done_reason", "")),
     }
+    compatibility_aliases = {
+        # Compatibility aliases retained for older tables/scripts; prefer the canonical names above.
+        "rmse_id": float(metric_summary.get("rmse_i_d", float("nan"))),
+        "rmse_iq": float(metric_summary.get("rmse_i_q", float("nan"))),
+        "rmse": float(metric_summary.get("rmse_all", float("nan"))),
+        "mae_id": float(metric_summary.get("mae_i_d", float("nan"))),
+        "mae_iq": float(metric_summary.get("mae_i_q", float("nan"))),
+        "iae": float(metric_summary.get("iae_all", float("nan"))),
+        "max_abs_error": float(metric_summary.get("max_abs_error_all", float("nan"))),
+        "action_smoothness": float(metric_summary.get("action_delta_energy", float("nan"))),
+        "steps": int(metric_summary.get("episode_length", len(df))),
+    }
+    canonical_row.update(compatibility_aliases)
+    return canonical_row
 
 
 def expand_globs(patterns: list[str]) -> list[str]:

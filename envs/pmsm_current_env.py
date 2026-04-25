@@ -17,10 +17,13 @@ from envs.motor_model import (
     electromagnetic_torque,
     rk4_step,
 )
+from envs.obs_parser import CUSTOM_ACTION_NAMES, CUSTOM_OBSERVATION_NAMES
 
 CUSTOM_OBS_OMEGA_BASE_RPM = 2200.0
 CUSTOM_OBS_OMEGA_BASE_RAD_PER_SEC = float(CUSTOM_OBS_OMEGA_BASE_RPM * (2.0 * np.pi / 60.0))
 CUSTOM_OBS_LOAD_TORQUE_BASE = 5.0
+CUSTOM_ACTION_LOW = -1.0
+CUSTOM_ACTION_HIGH = 1.0
 
 
 class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
@@ -40,19 +43,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
 
     metadata = {"render_modes": []}
 
-    OBSERVATION_NAMES = (
-        "i_d",
-        "i_q",
-        "omega_m",
-        "ref_i_d",
-        "ref_i_q",
-        "e_d",
-        "e_q",
-        "prev_u_d",
-        "prev_u_q",
-        "T_L",
-    )
-    ACTION_NAMES = ("act_u_d", "act_u_q")
+    OBSERVATION_NAMES = CUSTOM_OBSERVATION_NAMES
+    ACTION_NAMES = CUSTOM_ACTION_NAMES
     REWARD_TERM_NAMES = (
         "reward_tracking_d",
         "reward_tracking_q",
@@ -153,8 +145,8 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
         self.observation_is_normalized = True
 
         self.action_space = gym.spaces.Box(
-            low=-1.0,
-            high=1.0,
+            low=float(CUSTOM_ACTION_LOW),
+            high=float(CUSTOM_ACTION_HIGH),
             shape=(2,),
             dtype=np.float32,
         )
@@ -183,6 +175,24 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             "voltage": max(float(self.motor_params.Umax), 1e-6),
             "load_torque": float(CUSTOM_OBS_LOAD_TORQUE_BASE),
         }
+
+    @property
+    def action_normalization_bounds(self) -> tuple[float, float]:
+        """Return the normalized action bounds used by the RL-facing interface."""
+        return float(CUSTOM_ACTION_LOW), float(CUSTOM_ACTION_HIGH)
+
+    def denormalize_action(self, action: Iterable[float]) -> np.ndarray:
+        """Map a normalized action in [-1, 1]^2 to the physical dq voltage vector."""
+        action_arr = np.asarray(list(action), dtype=np.float64).reshape(2)
+        clipped_action = np.clip(action_arr, CUSTOM_ACTION_LOW, CUSTOM_ACTION_HIGH)
+        return clipped_action * float(self.motor_params.Umax)
+
+    def action_to_voltage_dq(self, action: Iterable[float]) -> np.ndarray:
+        """Map a normalized action to the saturated physical dq voltage command."""
+        return clip_voltage_vector(
+            self.denormalize_action(action),
+            limit=float(self.motor_params.Umax),
+        )
 
     @staticmethod
     def _as_range(values: Iterable[float], *, default: tuple[float, float]) -> tuple[float, float]:
@@ -559,12 +569,9 @@ class PMSMCurrentControlEnv(gym.Env[np.ndarray, np.ndarray]):
             safe_obs = self._build_observation()
             return safe_obs, -1.0, True, False, self._build_info(done_reason="non_finite_action")
 
-        clipped_action = np.clip(action_arr, -1.0, 1.0)
+        clipped_action = np.clip(action_arr, CUSTOM_ACTION_LOW, CUSTOM_ACTION_HIGH)
         self._maybe_update_load_torque_schedule()
-        u_dq = clip_voltage_vector(
-            clipped_action * float(self.motor_params.Umax),
-            limit=float(self.motor_params.Umax),
-        )
+        u_dq = self.action_to_voltage_dq(clipped_action)
         delta_a = clipped_action - self.prev_action
 
         done_reason = ""

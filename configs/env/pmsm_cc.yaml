@@ -22,16 +22,18 @@ environment:
   episode_steps: 2000
   init_i_d_range: [0.0, 0.0]
   init_i_q_range: [0.0, 0.0]
-  init_omega_m_range: [0.0, 0.0]
+  # Training speed range: 300-1800 rpm converted to rad/s.
+  init_omega_m_range: [31.4159265359, 188.4955592154]
   load_torque: 0.0
-  load_torque_range: [0.0, 0.0]
+  load_torque_range: [0.0, 3.0]
 
 reference:
   ref_i_d: 0.0
-  ref_i_q: 10.0
-  randomize_on_reset: false
-  ref_i_d_range: [0.0, 0.0]
-  ref_i_q_range: [10.0, 10.0]
+  ref_i_q: 0.0
+  randomize_on_reset: true
+  ref_i_d_range: [-6.0, 0.0]
+  ref_i_q_range: [-15.0, 15.0]
+  profile_types: [step, ramp, sinusoidal]
 
 noise:
   observation_noise_std: 0.0
@@ -65,7 +67,7 @@ domain_randomization:
   vdc_scale_range: [1.0, 1.0]
   sigma_i_range: [0.0, 0.0]
   sigma_omega_rpm_range: [0.0, 0.0]
-  load_torque_range: [0.0, 0.0]
+  load_torque_range: [0.0, 3.0]
   load_change_interval_steps_range: [0, 0]
 
 # Legacy GEM path configuration. This block is still used when

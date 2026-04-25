@@ -44,6 +44,15 @@ def _as_int_pair(value: Any, *, default: tuple[int, int]) -> tuple[int, int]:
     raise TypeError(f"Expected integer range value to be a list/tuple, got {type(value)}")
 
 
+def _as_string_tuple(value: Any, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return tuple(str(item) for item in default)
+    if isinstance(value, (list, tuple)):
+        items = tuple(str(item).strip() for item in value if str(item).strip())
+        return items or tuple(str(item) for item in default)
+    raise TypeError(f"Expected string-list value to be a list/tuple, got {type(value)}")
+
+
 @dataclass(slots=True)
 class MotorConfig:
     """Motor and inverter parameters for the custom PMSM model."""
@@ -98,6 +107,7 @@ class ReferenceConfig:
     randomize_on_reset: bool = False
     ref_i_d_range: tuple[float, float] = (0.0, 0.0)
     ref_i_q_range: tuple[float, float] = (10.0, 10.0)
+    profile_types: tuple[str, ...] = ("step", "ramp", "sinusoidal")
 
 
 @dataclass(slots=True)
@@ -315,6 +325,18 @@ class TrainConfig:
     domain_randomization: DomainRandomizationConfig | None = None
 
 
+@dataclass(slots=True)
+class EvalConfig:
+    """Evaluation configuration plus the path to named test scenarios."""
+
+    controller: str = "rl"
+    max_steps: int | None = None
+    seed: int | None = None
+    num_repeats: int = 3
+    task_name: str = "pmsm_current_control"
+    test_conditions_path: str = "configs/eval/pmsm_test_conditions.yaml"
+
+
 def load_yaml(path: str | Path) -> dict[str, Any]:
     """Load YAML as a dictionary."""
     p = Path(path)
@@ -387,6 +409,10 @@ def _parse_reference_config(data: dict[str, Any]) -> ReferenceConfig:
         ref_i_q_range=_as_float_pair(
             section.get("ref_i_q_range"),
             default=(ref_i_q, ref_i_q),
+        ),
+        profile_types=_as_string_tuple(
+            section.get("profile_types"),
+            default=defaults.profile_types,
         ),
     )
 
@@ -626,6 +652,20 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
     )
 
 
+def _parse_eval_config(data: dict[str, Any]) -> EvalConfig:
+    defaults = EvalConfig()
+    max_steps_value = data.get("max_steps", defaults.max_steps)
+    seed_value = data.get("seed", defaults.seed)
+    return EvalConfig(
+        controller=str(data.get("controller", defaults.controller)),
+        max_steps=None if max_steps_value is None else int(max_steps_value),
+        seed=None if seed_value is None else int(seed_value),
+        num_repeats=int(data.get("num_repeats", defaults.num_repeats)),
+        task_name=str(data.get("task_name", defaults.task_name)),
+        test_conditions_path=str(data.get("test_conditions_path", defaults.test_conditions_path)),
+    )
+
+
 def parse_env_config(path: str | Path) -> EnvConfig:
     """Parse YAML into :class:`EnvConfig` with backward-compatible defaults."""
     data = load_yaml(path)
@@ -655,6 +695,12 @@ def parse_train_config(path: str | Path) -> TrainConfig:
     """Parse YAML into :class:`TrainConfig`."""
     data = load_yaml(path)
     return _parse_train_config(data)
+
+
+def parse_eval_config(path: str | Path) -> EvalConfig:
+    """Parse YAML into :class:`EvalConfig`."""
+    data = load_yaml(path)
+    return _parse_eval_config(data)
 
 
 def parse_pi_config(path: str | Path) -> PIConfig:

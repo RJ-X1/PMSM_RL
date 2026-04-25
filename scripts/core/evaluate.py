@@ -36,6 +36,9 @@ from utils.experiment_factory import (
 from utils.run_layout import ensure_run_layout, make_run_layout
 from utils.seed import set_seed
 
+RAD_PER_SEC_TO_RPM = 60.0 / (2.0 * np.pi)
+DEFAULT_SCENARIO_NAME = "default"
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """CLI parser for evaluation."""
@@ -54,6 +57,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
     parser.add_argument("--output-csv", type=Path, default=None)
+    parser.add_argument("--scenario", default=None, help="Optional scenario label stored in the exported CSV")
     return parser
 
 
@@ -98,6 +102,16 @@ def _default_checkpoint_path(train_cfg: Any, *, tag: str = "best") -> Path:
     return layout.checkpoints_dir / "checkpoint_latest.pt"
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
 def run_evaluation(
     *,
     env_config_path: Path,
@@ -109,6 +123,7 @@ def run_evaluation(
     max_steps_override: int | None,
     output_csv_path: Path | None,
     seed_override: int | None = None,
+    scenario_name: str | None = None,
 ) -> dict[str, Any]:
     """Run one evaluation episode and export the trajectory CSV."""
     env_cfg = parse_env_config(env_config_path)
@@ -128,6 +143,7 @@ def run_evaluation(
     if default_eval_steps is None:
         default_eval_steps = getattr(getattr(env_cfg, "environment", None), "episode_steps", 500)
     max_steps = int(max_steps_override if max_steps_override is not None else default_eval_steps)
+    scenario = str(scenario_name).strip() if scenario_name not in (None, "") else DEFAULT_SCENARIO_NAME
 
     obs, _info = env.reset(seed=eval_seed)
     spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
@@ -137,6 +153,8 @@ def run_evaluation(
     reward_mode_name = getattr(base_env, "reward_mode", "")
     action_smoothness_enabled = bool(getattr(base_env, "action_smoothness_enabled", False))
     action_smoothness_weight = float(getattr(base_env, "action_smoothness_weight", 0.0))
+    motor_params = getattr(base_env, "motor_params", None)
+    sim_dt = _safe_float(getattr(motor_params, "Ts", None))
     missing_trace_columns = [
         name
         for name in required_eval_trace_columns(layout=spec.layout)
@@ -184,6 +202,7 @@ def run_evaluation(
         "controller",
         "env_id",
         "layout",
+        "scenario",
         "step",
         "reward",
         "cum_reward",
@@ -195,6 +214,18 @@ def run_evaluation(
         "reward_mode",
         "action_smoothness_enabled",
         "action_smoothness_weight",
+        "time_s",
+        "i_d_phys",
+        "i_q_phys",
+        "ref_i_d_phys",
+        "ref_i_q_phys",
+        "omega_m_phys",
+        "speed_rpm",
+        "load_torque_nm",
+        "u_d",
+        "u_q",
+        "active_Umax",
+        "action_saturated",
     ]
     fieldnames += signal_fieldnames + spec.action_names + reward_term_names
 
@@ -216,11 +247,13 @@ def run_evaluation(
             cum_reward += float(reward)
             done_reason = _extract_done_reason(_info, terminated=bool(terminated), truncated=bool(truncated))
             final_done_reason = done_reason
+            parsed_obs = parse_flat_observation(obs, spec=spec)
 
             row = {
                 "controller": controller_name,
                 "env_id": env_cfg.env_id,
                 "layout": spec.layout,
+                "scenario": scenario,
                 "step": step,
                 "reward": float(reward),
                 "cum_reward": float(cum_reward),
@@ -233,8 +266,53 @@ def run_evaluation(
                 "action_smoothness_enabled": int(action_smoothness_enabled),
                 "action_smoothness_weight": float(action_smoothness_weight),
             }
-            row.update(parse_flat_observation(obs, spec=spec))
+            if sim_dt is not None:
+                row["time_s"] = float(step) * sim_dt
+            row.update(parsed_obs)
             row.update({name: float(value) for name, value in zip(spec.action_names, action)})
+            if spec.layout == "custom_dq":
+                scales = getattr(base_env, "observation_normalization_scales", {})
+                current_scale = _safe_float(scales.get("current"))
+                omega_scale = _safe_float(scales.get("omega_m_rad_per_sec"))
+                load_scale = _safe_float(scales.get("load_torque"))
+                if current_scale is not None:
+                    if "i_d" in parsed_obs:
+                        row["i_d_phys"] = float(parsed_obs["i_d"]) * current_scale
+                    if "i_q" in parsed_obs:
+                        row["i_q_phys"] = float(parsed_obs["i_q"]) * current_scale
+                    if "ref_i_d" in parsed_obs:
+                        row["ref_i_d_phys"] = float(parsed_obs["ref_i_d"]) * current_scale
+                    if "ref_i_q" in parsed_obs:
+                        row["ref_i_q_phys"] = float(parsed_obs["ref_i_q"]) * current_scale
+                if omega_scale is not None and "omega_m" in parsed_obs:
+                    omega_m_phys = float(parsed_obs["omega_m"]) * omega_scale
+                    row["omega_m_phys"] = omega_m_phys
+                    row["speed_rpm"] = omega_m_phys * RAD_PER_SEC_TO_RPM
+                if load_scale is not None and "T_L" in parsed_obs:
+                    row["load_torque_nm"] = float(parsed_obs["T_L"]) * load_scale
+            if isinstance(_info, dict):
+                u_d = _safe_float(_info.get("prev_u_d"))
+                u_q = _safe_float(_info.get("prev_u_q"))
+                active_umax = _safe_float(_info.get("active_Umax"))
+                if u_d is not None:
+                    row["u_d"] = u_d
+                if u_q is not None:
+                    row["u_q"] = u_q
+                if active_umax is not None:
+                    row["active_Umax"] = active_umax
+                if (
+                    spec.layout == "custom_dq"
+                    and active_umax is not None
+                    and u_d is not None
+                    and u_q is not None
+                    and len(spec.action_names) >= 2
+                ):
+                    raw_command = np.clip(action[:2], action_low, action_high) * active_umax
+                    applied_command = np.asarray([u_d, u_q], dtype=np.float64)
+                    saturation_error = float(np.linalg.norm(raw_command - applied_command))
+                    row["action_saturated"] = int(
+                        saturation_error > (1e-6 * max(1.0, abs(active_umax)))
+                    )
             if reward_term_names:
                 reward_terms = _info.get("reward_terms", {}) if isinstance(_info, dict) else {}
                 row.update({name: float(reward_terms.get(name, 0.0)) for name in reward_term_names})
@@ -249,6 +327,7 @@ def run_evaluation(
         "agent_name": resolve_agent_name(train_cfg) if controller_name == "rl" else "pi",
         "env_id": env_cfg.env_id,
         "layout": spec.layout,
+        "scenario": scenario,
         "episode_return": float(cum_reward),
         "steps": int(step + 1),
         "done_reason": final_done_reason or "not_done",
@@ -274,10 +353,11 @@ def main() -> None:
         max_steps_override=args.max_steps,
         output_csv_path=args.output_csv,
         seed_override=args.seed,
+        scenario_name=args.scenario,
     )
     print(
         f"controller={result['controller']} agent={result['agent_name']} "
-        f"env_id={result['env_id']} layout={result['layout']} "
+        f"env_id={result['env_id']} layout={result['layout']} scenario={result['scenario']} "
         f"episode_return={result['episode_return']:.3f} steps={result['steps']} "
         f"done_reason={result['done_reason']} checkpoint={result['checkpoint_path']} "
         f"csv={result['output_csv']}"
