@@ -4,9 +4,14 @@ import argparse
 import glob
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from utils.metrics import summarize_eval_csv
 
