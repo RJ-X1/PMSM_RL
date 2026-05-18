@@ -53,6 +53,14 @@ def _as_string_tuple(value: Any, *, default: tuple[str, ...]) -> tuple[str, ...]
     raise TypeError(f"Expected string-list value to be a list/tuple, got {type(value)}")
 
 
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
 @dataclass(slots=True)
 class MotorConfig:
     """Motor and inverter parameters for the custom PMSM model."""
@@ -94,6 +102,7 @@ class CustomEnvSettings:
     init_i_d_range: tuple[float, float] = (0.0, 0.0)
     init_i_q_range: tuple[float, float] = (0.0, 0.0)
     init_omega_m_range: tuple[float, float] = (0.0, 0.0)
+    speed_mode: str = "dynamic"
     load_torque: float = 0.0
     load_torque_range: tuple[float, float] = (0.0, 0.0)
 
@@ -108,6 +117,14 @@ class ReferenceConfig:
     ref_i_d_range: tuple[float, float] = (0.0, 0.0)
     ref_i_q_range: tuple[float, float] = (10.0, 10.0)
     profile_types: tuple[str, ...] = ("step", "ramp", "sinusoidal")
+    reference_profile: str = "constant"
+    ref_i_d_initial: float | None = None
+    ref_i_q_initial: float | None = None
+    ref_i_d_final: float | None = None
+    ref_i_q_final: float | None = None
+    reference_step_time_s: float | None = None
+    reference_step_time_s_range: tuple[float, float] | None = None
+    reference_step_step: int | None = None
 
 
 @dataclass(slots=True)
@@ -148,6 +165,17 @@ class RewardConfig:
     w_u: float = 0.08
     w_da: float = 0.07
     w_lim: float = 0.05
+    w_tracking: float = 0.65
+    w_voltage: float = 0.03
+    w_smoothness: float = 0.04
+    w_saturation: float = 0.10
+    w_prestep: float = 0.10
+    w_ff_residual: float = 0.02
+    w_convergence: float = 0.02
+    idle_reference_threshold: float = 0.50
+    saturation_soft_threshold: float = 0.90
+    prestep_voltage_scale: float = 0.25
+    current_error_deadband: float = 0.0
 
 
 @dataclass(slots=True)
@@ -230,9 +258,18 @@ class EnvConfig:
             "randomize_reference": bool(self.reference.randomize_on_reset),
             "ref_i_d_range": tuple(self.reference.ref_i_d_range),
             "ref_i_q_range": tuple(self.reference.ref_i_q_range),
+            "reference_profile": str(self.reference.reference_profile),
+            "ref_i_d_initial": self.reference.ref_i_d_initial,
+            "ref_i_q_initial": self.reference.ref_i_q_initial,
+            "ref_i_d_final": self.reference.ref_i_d_final,
+            "ref_i_q_final": self.reference.ref_i_q_final,
+            "reference_step_time_s": self.reference.reference_step_time_s,
+            "reference_step_time_s_range": self.reference.reference_step_time_s_range,
+            "reference_step_step": self.reference.reference_step_step,
             "init_i_d_range": tuple(self.environment.init_i_d_range),
             "init_i_q_range": tuple(self.environment.init_i_q_range),
             "init_omega_m_range": tuple(self.environment.init_omega_m_range),
+            "speed_mode": str(self.environment.speed_mode),
             "load_torque": float(self.environment.load_torque),
             "load_torque_range": tuple(self.environment.load_torque_range),
             "observation_noise_std": float(self.noise.observation_noise_std),
@@ -243,6 +280,17 @@ class EnvConfig:
             "reward_w_u": float(self.reward.w_u),
             "reward_w_da": float(self.reward.w_da),
             "reward_w_lim": float(self.reward.w_lim),
+            "reward_tracking_weight": float(self.reward.w_tracking),
+            "reward_voltage_magnitude_weight": float(self.reward.w_voltage),
+            "reward_smoothness_weight": float(self.reward.w_smoothness),
+            "reward_saturation_weight": float(self.reward.w_saturation),
+            "reward_prestep_weight": float(self.reward.w_prestep),
+            "reward_ff_residual_weight": float(self.reward.w_ff_residual),
+            "reward_convergence_weight": float(self.reward.w_convergence),
+            "reward_idle_reference_threshold": float(self.reward.idle_reference_threshold),
+            "reward_saturation_soft_threshold": float(self.reward.saturation_soft_threshold),
+            "reward_prestep_voltage_scale": float(self.reward.prestep_voltage_scale),
+            "reward_current_error_deadband": float(self.reward.current_error_deadband),
             "action_smoothness_enabled": bool(self.action_smoothness.enabled),
             "action_smoothness_weight": float(self.action_smoothness.weight),
             "domain_randomization": self.domain_randomization.to_env_kwargs(),
@@ -297,6 +345,7 @@ class TrainConfig:
     run_name: str = "_old_ddpg_pmsm_cc"
     output_dir: str = "outputs"
     device: str = "cpu"
+    seed: int | None = None
     gamma: float = 0.99
     tau: float = 0.005
     polyak: float | None = None
@@ -311,12 +360,22 @@ class TrainConfig:
     max_steps_per_episode: int | None = None
     hidden_dim: int = 256
     exploration_noise: float = 0.1
+    exploration_noise_final: float | None = None
+    exploration_noise_decay_steps: int | None = None
     target_policy_noise: float = 0.20
     target_noise_clip: float = 0.50
     policy_delay: int = 2
     eval_every_steps: int | None = None
     eval_every_episodes: int | None = 10
     eval_episodes: int = 3
+    eval_config: str | None = None
+    eval_scenario: str | None = None
+    eval_metric: str = "mean_return"
+    best_checkpoint_metric: str = "mean_return"
+    controller_mode: str | None = None
+    residual_scale: float = 0.2
+    residual_action_clip: float | None = 0.3
+    residual_zero_test: bool = False
     log_every_steps: int = 100
     save_every_steps: int | None = None
     save_every_episodes: int | None = 25
@@ -330,6 +389,10 @@ class EvalConfig:
     """Evaluation configuration plus the path to named test scenarios."""
 
     controller: str = "rl"
+    controller_mode: str | None = None
+    residual_scale: float = 0.2
+    residual_action_clip: float | None = 0.3
+    residual_zero_test: bool = False
     max_steps: int | None = None
     seed: int | None = None
     num_repeats: int = 3
@@ -385,6 +448,7 @@ def _parse_environment_settings(data: dict[str, Any]) -> CustomEnvSettings:
             section.get("init_omega_m_range"),
             default=defaults.init_omega_m_range,
         ),
+        speed_mode=str(section.get("speed_mode", data.get("speed_mode", defaults.speed_mode))),
         load_torque=default_load_torque,
         load_torque_range=_as_float_pair(
             section.get("load_torque_range"),
@@ -398,6 +462,9 @@ def _parse_reference_config(data: dict[str, Any]) -> ReferenceConfig:
     section = _as_mapping(data.get("reference"), name="reference")
     ref_i_d = float(section.get("ref_i_d", section.get("i_d", defaults.ref_i_d)))
     ref_i_q = float(section.get("ref_i_q", section.get("i_q", defaults.ref_i_q)))
+    reference_profile = str(
+        section.get("reference_profile", section.get("profile", defaults.reference_profile))
+    ).strip().lower()
     return ReferenceConfig(
         ref_i_d=ref_i_d,
         ref_i_q=ref_i_q,
@@ -414,6 +481,18 @@ def _parse_reference_config(data: dict[str, Any]) -> ReferenceConfig:
             section.get("profile_types"),
             default=defaults.profile_types,
         ),
+        reference_profile=reference_profile,
+        ref_i_d_initial=_optional_float(section.get("ref_i_d_initial", section.get("i_d_initial"))),
+        ref_i_q_initial=_optional_float(section.get("ref_i_q_initial", section.get("i_q_initial"))),
+        ref_i_d_final=_optional_float(section.get("ref_i_d_final", section.get("i_d_final"))),
+        ref_i_q_final=_optional_float(section.get("ref_i_q_final", section.get("i_q_final"))),
+        reference_step_time_s=_optional_float(section.get("reference_step_time_s")),
+        reference_step_time_s_range=(
+            None
+            if section.get("reference_step_time_s_range") is None
+            else _as_float_pair(section.get("reference_step_time_s_range"), default=(0.0, 0.0))
+        ),
+        reference_step_step=_optional_int(section.get("reference_step_step")),
     )
 
 
@@ -446,29 +525,67 @@ def _parse_termination_config(data: dict[str, Any]) -> TerminationConfig:
     )
 
 
-def _build_reward_config(section: Mapping[str, Any], defaults: RewardConfig) -> RewardConfig:
+def _build_reward_config(
+    section: Mapping[str, Any],
+    defaults: RewardConfig,
+    *,
+    mode_override: Any = None,
+) -> RewardConfig:
+    mode_default = defaults.mode if mode_override in (None, "") else mode_override
     return RewardConfig(
-        mode=str(section.get("mode", defaults.mode)).strip().lower(),
+        mode=str(section.get("mode", section.get("reward_mode", mode_default))).strip().lower(),
         w_ed=float(section.get("w_ed", defaults.w_ed)),
         w_eq=float(section.get("w_eq", defaults.w_eq)),
         w_u=float(section.get("w_u", defaults.w_u)),
         w_da=float(section.get("w_da", defaults.w_da)),
         w_lim=float(section.get("w_lim", defaults.w_lim)),
+        w_tracking=float(section.get("w_tracking", section.get("tracking_weight", defaults.w_tracking))),
+        w_voltage=float(section.get("w_voltage", section.get("voltage_weight", defaults.w_voltage))),
+        w_smoothness=float(
+            section.get("w_smoothness", section.get("smoothness_weight", defaults.w_smoothness))
+        ),
+        w_saturation=float(
+            section.get("w_saturation", section.get("saturation_weight", defaults.w_saturation))
+        ),
+        w_prestep=float(section.get("w_prestep", section.get("prestep_weight", defaults.w_prestep))),
+        w_ff_residual=float(
+            section.get(
+                "w_ff_residual",
+                section.get("ff_residual_weight", defaults.w_ff_residual),
+            )
+        ),
+        w_convergence=float(
+            section.get("w_convergence", section.get("convergence_weight", defaults.w_convergence))
+        ),
+        idle_reference_threshold=float(
+            section.get(
+                "idle_reference_threshold",
+                section.get("prestep_reference_threshold", defaults.idle_reference_threshold),
+            )
+        ),
+        saturation_soft_threshold=float(
+            section.get("saturation_soft_threshold", defaults.saturation_soft_threshold)
+        ),
+        prestep_voltage_scale=float(section.get("prestep_voltage_scale", defaults.prestep_voltage_scale)),
+        current_error_deadband=float(section.get("current_error_deadband", defaults.current_error_deadband)),
     )
 
 
 def _parse_env_reward_config(data: dict[str, Any]) -> RewardConfig:
     defaults = RewardConfig()
     section = _as_mapping(data.get("reward"), name="reward")
-    return _build_reward_config(section, defaults)
+    return _build_reward_config(section, defaults, mode_override=data.get("reward_mode"))
 
 
 def _parse_train_reward_config(data: dict[str, Any]) -> RewardConfig | None:
     if "reward" not in data:
-        return None
+        if "reward_mode" not in data:
+            return None
+        defaults = RewardConfig()
+        return _build_reward_config({}, defaults, mode_override=data.get("reward_mode"))
     defaults = RewardConfig()
     section = _as_mapping(data.get("reward"), name="reward")
-    return _build_reward_config(section, defaults)
+    return _build_reward_config(section, defaults, mode_override=data.get("reward_mode"))
 
 
 def _build_action_smoothness_config(
@@ -577,6 +694,27 @@ def _parse_train_domain_randomization_config(
     return _build_domain_randomization_config(section, defaults)
 
 
+def _parse_residual_control_fields(data: dict[str, Any], defaults: Any) -> dict[str, Any]:
+    section = _as_mapping(data.get("residual_control"), name="residual_control")
+    controller_mode = section.get("controller_mode", data.get("controller_mode", defaults.controller_mode))
+    residual_action_clip = section.get(
+        "residual_action_clip",
+        data.get("residual_action_clip", defaults.residual_action_clip),
+    )
+    return {
+        "controller_mode": None if controller_mode in (None, "") else str(controller_mode).strip().lower(),
+        "residual_scale": float(
+            section.get("residual_scale", data.get("residual_scale", defaults.residual_scale))
+        ),
+        "residual_action_clip": (
+            None if residual_action_clip in (None, "") else float(residual_action_clip)
+        ),
+        "residual_zero_test": bool(
+            section.get("residual_zero_test", data.get("residual_zero_test", defaults.residual_zero_test))
+        ),
+    }
+
+
 def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
     defaults = PIConfig()
     return PIConfig(
@@ -611,15 +749,22 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
     eval_every_episodes_value = data.get("eval_every_episodes", defaults.eval_every_episodes)
     save_every_steps_value = data.get("save_every_steps", defaults.save_every_steps)
     save_every_episodes_value = data.get("save_every_episodes", defaults.save_every_episodes)
+    exploration_noise_final_value = data.get("exploration_noise_final", defaults.exploration_noise_final)
+    exploration_noise_decay_steps_value = data.get(
+        "exploration_noise_decay_steps",
+        defaults.exploration_noise_decay_steps,
+    )
     if tau_value is None and polyak_value is not None:
         tau_value = 1.0 - float(polyak_value)
     train_reward = _parse_train_reward_config(data)
+    residual_fields = _parse_residual_control_fields(data, defaults)
 
     return TrainConfig(
         algo=str(data.get("algo", defaults.algo)).lower(),
         run_name=str(data.get("run_name", defaults.run_name)),
         output_dir=str(data.get("output_dir", defaults.output_dir)),
         device=str(data.get("device", defaults.device)),
+        seed=None if data.get("seed", defaults.seed) is None else int(data.get("seed", defaults.seed)),
         gamma=float(data.get("gamma", defaults.gamma)),
         tau=float(tau_value if tau_value is not None else defaults.tau),
         polyak=None if polyak_value is None else float(polyak_value),
@@ -634,12 +779,28 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         max_steps_per_episode=None if max_steps_per_episode_value is None else int(max_steps_per_episode_value),
         hidden_dim=int(data.get("hidden_dim", defaults.hidden_dim)),
         exploration_noise=float(data.get("exploration_noise", defaults.exploration_noise)),
+        exploration_noise_final=(
+            None if exploration_noise_final_value is None else float(exploration_noise_final_value)
+        ),
+        exploration_noise_decay_steps=(
+            None if exploration_noise_decay_steps_value is None else int(exploration_noise_decay_steps_value)
+        ),
         target_policy_noise=float(data.get("target_policy_noise", defaults.target_policy_noise)),
         target_noise_clip=float(data.get("target_noise_clip", defaults.target_noise_clip)),
         policy_delay=int(data.get("policy_delay", defaults.policy_delay)),
         eval_every_steps=None if eval_every_steps_value is None else int(eval_every_steps_value),
         eval_every_episodes=None if eval_every_episodes_value is None else int(eval_every_episodes_value),
         eval_episodes=int(data.get("eval_episodes", defaults.eval_episodes)),
+        eval_config=None if data.get("eval_config", defaults.eval_config) is None else str(data.get("eval_config")),
+        eval_scenario=None if data.get("eval_scenario", defaults.eval_scenario) is None else str(data.get("eval_scenario")),
+        eval_metric=str(data.get("eval_metric", defaults.eval_metric)).strip().lower(),
+        best_checkpoint_metric=str(
+            data.get("best_checkpoint_metric", data.get("eval_metric", defaults.best_checkpoint_metric))
+        ).strip().lower(),
+        controller_mode=residual_fields["controller_mode"],
+        residual_scale=residual_fields["residual_scale"],
+        residual_action_clip=residual_fields["residual_action_clip"],
+        residual_zero_test=residual_fields["residual_zero_test"],
         log_every_steps=int(data.get("log_every_steps", defaults.log_every_steps)),
         save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
         save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
@@ -656,8 +817,13 @@ def _parse_eval_config(data: dict[str, Any]) -> EvalConfig:
     defaults = EvalConfig()
     max_steps_value = data.get("max_steps", defaults.max_steps)
     seed_value = data.get("seed", defaults.seed)
+    residual_fields = _parse_residual_control_fields(data, defaults)
     return EvalConfig(
         controller=str(data.get("controller", defaults.controller)),
+        controller_mode=residual_fields["controller_mode"],
+        residual_scale=residual_fields["residual_scale"],
+        residual_action_clip=residual_fields["residual_action_clip"],
+        residual_zero_test=residual_fields["residual_zero_test"],
         max_steps=None if max_steps_value is None else int(max_steps_value),
         seed=None if seed_value is None else int(seed_value),
         num_repeats=int(data.get("num_repeats", defaults.num_repeats)),

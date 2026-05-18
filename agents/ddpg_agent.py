@@ -85,6 +85,7 @@ class DDPGAgent:
 
         with torch.no_grad():
             next_acts = self.actor_target(next_obs)  # (B, act_dim)
+            next_acts = next_acts.clamp(self.action_low, self.action_high)
             target_q = self.critic_target(next_obs, next_acts)  # (B, 1)
             y = rews + (1.0 - dones) * self.hparams.gamma * target_q  # (B, 1)
 
@@ -95,6 +96,7 @@ class DDPGAgent:
         self.critic_optim.step()
 
         pred_actions = self.actor(obs)  # (B, act_dim)
+        pred_actions = pred_actions.clamp(self.action_low, self.action_high)
         actor_loss = -self.critic(obs, pred_actions).mean()
         self.actor_optim.zero_grad()
         actor_loss.backward()

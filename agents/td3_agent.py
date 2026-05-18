@@ -111,6 +111,7 @@ class TD3Agent:
         actor_updated = 0.0
         if self._update_step_count % int(self.hparams.policy_delay) == 0:
             pred_actions = self.actor(obs)
+            pred_actions = pred_actions.clamp(self.action_low, self.action_high)
             actor_loss = -self.critics.q1_forward(obs, pred_actions).mean()
             self.actor_optim.zero_grad()
             actor_loss.backward()

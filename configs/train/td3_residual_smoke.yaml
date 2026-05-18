@@ -1,0 +1,37 @@
+algo: td3
+run_name: td3_residual_smoke
+output_dir: outputs
+device: cpu
+seed: 0
+
+controller_mode: residual
+residual_scale: 0.2
+residual_action_clip: 0.3
+residual_zero_test: false
+
+total_steps: 1000
+replay_capacity: 10000
+batch_size: 256
+warmup_steps: 200
+update_after: 200
+
+gamma: 0.99
+tau: 0.005
+lr_actor: 0.00005
+lr_critic: 0.001
+hidden_dim: 256
+
+exploration_noise: 0.10
+target_policy_noise: 0.20
+target_noise_clip: 0.50
+policy_delay: 2
+
+eval_every_steps: 1000
+eval_episodes: 1
+eval_config: configs/eval/default.yaml
+eval_scenario: test_1_nominal_step_tracking
+eval_metric: mean_return
+best_checkpoint_metric: rmse_all
+save_every_steps: 1000
+log_every_steps: 100
+

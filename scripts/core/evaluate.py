@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 import argparse
 import csv
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -21,29 +22,41 @@ from envs.obs_parser import build_observation_spec, parse_flat_observation, requ
 from utils.config import (
     apply_train_action_smoothness_override,
     apply_train_reward_override,
+    load_yaml,
     parse_env_config,
+    parse_eval_config,
     parse_pi_config,
     parse_train_config,
 )
 from utils.experiment_factory import (
     DEFAULT_ENV_CONFIG_PATH,
+    DEFAULT_EVAL_CONFIG_PATH,
     DEFAULT_PI_CONFIG_PATH,
     DEFAULT_TRAIN_CONFIG_PATH,
     build_rl_agent,
     make_env_build_config,
     resolve_agent_name,
 )
+from utils.residual_control import (
+    compose_residual_action,
+    is_residual_controller,
+    normalize_controller_name,
+    resolve_residual_settings,
+)
 from utils.run_layout import ensure_run_layout, make_run_layout
 from utils.seed import set_seed
 
 RAD_PER_SEC_TO_RPM = 60.0 / (2.0 * np.pi)
 DEFAULT_SCENARIO_NAME = "default"
+TEST1_SCENARIO_KEYS = {"test1", "test1nominalsteptracking"}
+TEST1_REFERENCE_STEP_TIME_S = 0.02
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """CLI parser for evaluation."""
     parser = argparse.ArgumentParser(description="Evaluate DDPG or PI baseline and export trajectory")
     parser.add_argument("--env-config", type=Path, default=DEFAULT_ENV_CONFIG_PATH)
+    parser.add_argument("--eval-config", type=Path, default=DEFAULT_EVAL_CONFIG_PATH)
     parser.add_argument("--train-config", type=Path, default=DEFAULT_TRAIN_CONFIG_PATH)
     parser.add_argument("--pi-config", type=Path, default=DEFAULT_PI_CONFIG_PATH)
     parser.add_argument("--checkpoint", type=Path, default=None)
@@ -53,11 +66,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="best",
         help="Preferred RL checkpoint alias when --checkpoint is not provided.",
     )
-    parser.add_argument("--controller", choices=("rl", "pi"), default="rl")
+    parser.add_argument("--controller", choices=("rl", "pi", "residual", "pi_rl_residual"), default="rl")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
     parser.add_argument("--output-csv", type=Path, default=None)
-    parser.add_argument("--scenario", default=None, help="Optional scenario label stored in the exported CSV")
+    parser.add_argument("--residual-scale", type=float, default=None)
+    parser.add_argument("--residual-action-clip", type=float, default=None)
+    parser.add_argument("--residual-zero-test", action="store_true")
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Optional scenario label stored in the exported CSV; Test-1 applies nominal eval overrides.",
+    )
     return parser
 
 
@@ -102,6 +122,66 @@ def _default_checkpoint_path(train_cfg: Any, *, tag: str = "best") -> Path:
     return layout.checkpoints_dir / "checkpoint_latest.pt"
 
 
+def _make_pi_controller(
+    *,
+    act_dim: int,
+    spec: Any,
+    pi_cfg: Any,
+    env_cfg: Any,
+) -> PICurrentController:
+    motor_params = env_cfg.motor.to_motor_params() if bool(getattr(env_cfg, "use_custom_env", False)) else None
+    pi = PICurrentController(
+        action_dim=act_dim,
+        signal_names=spec.signal_names,
+        config=pi_cfg.to_controller_config(),
+        motor_params=motor_params,
+    )
+    pi.reset()
+    return pi
+
+
+def _residual_csv_fieldnames() -> list[str]:
+    return [
+        "action_pi_d",
+        "action_pi_q",
+        "action_residual_raw_d",
+        "action_residual_raw_q",
+        "action_residual_d",
+        "action_residual_q",
+        "action_total_d",
+        "action_total_q",
+        "action_total_clipped_d",
+        "action_total_clipped_q",
+        "residual_scale",
+        "residual_action_clip",
+        "residual_zero_test",
+        "residual_clip_applied",
+        "action_total_clip_applied",
+    ]
+
+
+def _add_residual_row_fields(row: dict[str, Any], residual_trace: dict[str, Any], *, settings: Any) -> None:
+    labels = (
+        ("action_pi", "action_pi"),
+        ("action_residual_raw", "action_residual_raw"),
+        ("action_residual", "action_residual"),
+        ("action_total", "action_total"),
+        ("action_total_clipped", "action_total_clipped"),
+    )
+    for trace_key, column_prefix in labels:
+        values = np.asarray(residual_trace[trace_key], dtype=np.float64).reshape(-1)
+        if values.size >= 2:
+            row[f"{column_prefix}_d"] = float(values[0])
+            row[f"{column_prefix}_q"] = float(values[1])
+    row["residual_scale"] = float(settings.residual_scale)
+    row["residual_action_clip"] = (
+        "" if settings.residual_action_clip is None else float(settings.residual_action_clip)
+    )
+    row["residual_zero_test"] = int(bool(settings.residual_zero_test))
+    row["residual_clip_applied"] = int(bool(residual_trace["residual_clip_applied"]))
+    row["action_total_clip_applied"] = int(bool(residual_trace["action_total_clip_applied"]))
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         numeric = float(value)
@@ -110,6 +190,122 @@ def _safe_float(value: Any) -> float | None:
     if not np.isfinite(numeric):
         return None
     return numeric
+
+
+def _normalize_scenario_key(value: Any) -> str:
+    return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
+
+
+def _resolve_test_conditions_path(eval_config_path: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute() or path.exists():
+        return path
+    candidate = eval_config_path.parent / path
+    if candidate.exists():
+        return candidate
+    return ROOT / path
+
+
+def _scenario_matches(condition: dict[str, Any], scenario_name: str) -> bool:
+    scenario_key = _normalize_scenario_key(scenario_name)
+    candidates = (
+        condition.get("id"),
+        condition.get("name"),
+    )
+    return any(_normalize_scenario_key(candidate) == scenario_key for candidate in candidates)
+
+
+def _is_test1_condition(condition: dict[str, Any]) -> bool:
+    candidates = (
+        condition.get("id"),
+        condition.get("name"),
+    )
+    return any(_normalize_scenario_key(candidate) in TEST1_SCENARIO_KEYS for candidate in candidates)
+
+
+def _find_eval_condition(eval_config_path: Path, scenario_name: str) -> dict[str, Any] | None:
+    eval_cfg = parse_eval_config(eval_config_path)
+    conditions_path = _resolve_test_conditions_path(
+        eval_config_path,
+        str(eval_cfg.test_conditions_path),
+    )
+    data = load_yaml(conditions_path)
+    conditions = data.get("test_scenarios", [])
+    if not isinstance(conditions, list):
+        raise TypeError(f"Expected 'test_scenarios' to be a list in {conditions_path}")
+    for condition in conditions:
+        if isinstance(condition, dict) and _scenario_matches(condition, scenario_name):
+            return condition
+    return None
+
+
+def _apply_test1_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> Any:
+    reference = condition.get("reference", {})
+    if not isinstance(reference, dict):
+        reference = {}
+    omega_m_rpm = float(condition.get("omega_m_rpm", 1000.0))
+    omega_m = omega_m_rpm / RAD_PER_SEC_TO_RPM
+    load_torque = float(condition.get("load_torque_nm", 1.0))
+    init_i_d = float(reference.get("i_d_initial", 0.0))
+    init_i_q = float(reference.get("i_q_initial", 0.0))
+    ref_i_d = float(reference.get("i_d_final", -3.0))
+    ref_i_q = float(reference.get("i_q_final", 10.0))
+
+    return replace(
+        env_cfg,
+        environment=replace(
+            env_cfg.environment,
+            init_i_d_range=(init_i_d, init_i_d),
+            init_i_q_range=(init_i_q, init_i_q),
+            init_omega_m_range=(omega_m, omega_m),
+            speed_mode="fixed",
+            episode_steps=2000,
+            load_torque=load_torque,
+            load_torque_range=(load_torque, load_torque),
+        ),
+        reference=replace(
+            env_cfg.reference,
+            ref_i_d=ref_i_d,
+            ref_i_q=ref_i_q,
+            randomize_on_reset=False,
+            ref_i_d_range=(init_i_d, ref_i_d),
+            ref_i_q_range=(init_i_q, ref_i_q),
+            reference_profile="step",
+            ref_i_d_initial=init_i_d,
+            ref_i_q_initial=init_i_q,
+            ref_i_d_final=ref_i_d,
+            ref_i_q_final=ref_i_q,
+            reference_step_time_s=TEST1_REFERENCE_STEP_TIME_S,
+            reference_step_step=None,
+        ),
+        noise=replace(
+            env_cfg.noise,
+            observation_noise_std=0.0,
+            process_noise_std=0.0,
+        ),
+        domain_randomization=replace(
+            env_cfg.domain_randomization,
+            enabled=False,
+            sigma_i_range=(0.0, 0.0),
+            sigma_omega_rpm_range=(0.0, 0.0),
+            load_torque_range=(load_torque, load_torque),
+            load_change_interval_steps_range=(0, 0),
+        ),
+    )
+
+
+def _maybe_apply_eval_scenario(env_cfg: Any, eval_config_path: Path, scenario_name: str | None) -> Any:
+    if scenario_name in (None, ""):
+        return env_cfg
+    condition = _find_eval_condition(eval_config_path, str(scenario_name))
+    if condition is not None and _is_test1_condition(condition):
+        print(
+            f"scenario={scenario_name} matched Test-1 nominal step tracking; "
+            "applying fixed-speed step-reference eval overrides."
+        )
+        return _apply_test1_env_overrides(env_cfg, condition)
+    print(f"scenario={scenario_name} did not match supported Test-1; using env-config as-is.")
+    return env_cfg
 
 
 def run_evaluation(
@@ -124,12 +320,31 @@ def run_evaluation(
     output_csv_path: Path | None,
     seed_override: int | None = None,
     scenario_name: str | None = None,
+    eval_config_path: Path | None = None,
+    residual_scale_override: float | None = None,
+    residual_action_clip_override: float | None = None,
+    residual_zero_test_override: bool | None = None,
 ) -> dict[str, Any]:
     """Run one evaluation episode and export the trajectory CSV."""
     env_cfg = parse_env_config(env_config_path)
     train_cfg = parse_train_config(train_config_path)
+    effective_eval_config_path = Path(eval_config_path or DEFAULT_EVAL_CONFIG_PATH)
+    eval_cfg = parse_eval_config(effective_eval_config_path)
+    controller_name = normalize_controller_name(controller_name)
+    residual_settings = resolve_residual_settings(
+        train_cfg,
+        eval_cfg,
+        residual_scale_override=residual_scale_override,
+        residual_action_clip_override=residual_action_clip_override,
+        residual_zero_test_override=residual_zero_test_override,
+    )
     env_cfg = apply_train_reward_override(env_cfg, train_cfg)
     env_cfg = apply_train_action_smoothness_override(env_cfg, train_cfg)
+    env_cfg = _maybe_apply_eval_scenario(
+        env_cfg,
+        effective_eval_config_path,
+        scenario_name,
+    )
     pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
@@ -163,7 +378,8 @@ def run_evaluation(
     if missing_trace_columns:
         raise KeyError(f"Evaluation export is missing required trace columns: {missing_trace_columns}")
 
-    if controller_name == "rl":
+    residual_mode = is_residual_controller(controller_name)
+    if controller_name == "rl" or residual_mode:
         agent = build_rl_agent(
             obs_dim=obs_dim,
             act_dim=act_dim,
@@ -174,22 +390,34 @@ def run_evaluation(
         resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg, tag=checkpoint_tag)
         agent.load_checkpoint(resolved_checkpoint)
 
-        def policy_fn(policy_obs: np.ndarray) -> np.ndarray:
-            return agent.select_action(policy_obs, add_noise=False)
+        if residual_mode:
+            pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
 
-    else:
+            def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+                action_pi = pi.compute_action(policy_obs)
+                action_residual_raw = agent.select_action(policy_obs, add_noise=False)
+                residual_trace = compose_residual_action(
+                    action_pi=action_pi,
+                    action_residual_raw=action_residual_raw,
+                    action_low=action_low,
+                    action_high=action_high,
+                    settings=residual_settings,
+                )
+                return residual_trace["action_total_clipped"], residual_trace
+
+        else:
+
+            def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
+                return agent.select_action(policy_obs, add_noise=False), None
+
+    elif controller_name == "pi":
         resolved_checkpoint = checkpoint_path
-        motor_params = env_cfg.motor.to_motor_params() if bool(getattr(env_cfg, "use_custom_env", False)) else None
-        pi = PICurrentController(
-            action_dim=act_dim,
-            signal_names=spec.signal_names,
-            config=pi_cfg.to_controller_config(),
-            motor_params=motor_params,
-        )
-        pi.reset()
+        pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
 
-        def policy_fn(policy_obs: np.ndarray) -> np.ndarray:
-            return pi.compute_action(policy_obs)
+        def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
+            return pi.compute_action(policy_obs), None
+    else:
+        raise ValueError(f"Unsupported controller: {controller_name}")
 
     final_output_csv = output_csv_path or _default_output_csv_path(train_cfg, controller_name)
     final_output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +455,8 @@ def run_evaluation(
         "active_Umax",
         "action_saturated",
     ]
+    if residual_mode:
+        fieldnames += _residual_csv_fieldnames()
     fieldnames += signal_fieldnames + spec.action_names + reward_term_names
 
     with final_output_csv.open("w", newline="", encoding="utf-8") as f:
@@ -234,7 +464,7 @@ def run_evaluation(
         writer.writeheader()
 
         for step in range(max_steps):
-            action = policy_fn(obs)
+            action, residual_trace = policy_fn(obs)
             action = np.asarray(action, dtype=np.float32).reshape(act_dim)
             action = np.clip(action, action_low, action_high)
             if not np.isfinite(action).all():
@@ -266,6 +496,8 @@ def run_evaluation(
                 "action_smoothness_enabled": int(action_smoothness_enabled),
                 "action_smoothness_weight": float(action_smoothness_weight),
             }
+            if residual_mode and residual_trace is not None:
+                _add_residual_row_fields(row, residual_trace, settings=residual_settings)
             if sim_dt is not None:
                 row["time_s"] = float(step) * sim_dt
             row.update(parsed_obs)
@@ -324,7 +556,11 @@ def run_evaluation(
 
     return {
         "controller": controller_name,
-        "agent_name": resolve_agent_name(train_cfg) if controller_name == "rl" else "pi",
+        "agent_name": (
+            f"pi+{resolve_agent_name(train_cfg)}_residual"
+            if residual_mode
+            else resolve_agent_name(train_cfg) if controller_name == "rl" else "pi"
+        ),
         "env_id": env_cfg.env_id,
         "layout": spec.layout,
         "scenario": scenario,
@@ -333,11 +569,14 @@ def run_evaluation(
         "done_reason": final_done_reason or "not_done",
         "output_csv": final_output_csv,
         "checkpoint_path": resolved_checkpoint,
-        "checkpoint_tag": None if controller_name != "rl" else str(checkpoint_tag),
+        "checkpoint_tag": str(checkpoint_tag) if controller_name == "rl" or residual_mode else None,
         "seed": eval_seed,
         "terminated": int(bool(terminated)),
         "truncated": int(bool(truncated)),
         "done": int(bool(terminated or truncated)),
+        "residual_scale": float(residual_settings.residual_scale),
+        "residual_action_clip": residual_settings.residual_action_clip,
+        "residual_zero_test": bool(residual_settings.residual_zero_test),
     }
 
 
@@ -345,6 +584,7 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     result = run_evaluation(
         env_config_path=args.env_config,
+        eval_config_path=args.eval_config,
         train_config_path=args.train_config,
         pi_config_path=args.pi_config,
         controller_name=str(args.controller),
@@ -354,6 +594,9 @@ def main() -> None:
         output_csv_path=args.output_csv,
         seed_override=args.seed,
         scenario_name=args.scenario,
+        residual_scale_override=args.residual_scale,
+        residual_action_clip_override=args.residual_action_clip,
+        residual_zero_test_override=True if args.residual_zero_test else None,
     )
     print(
         f"controller={result['controller']} agent={result['agent_name']} "

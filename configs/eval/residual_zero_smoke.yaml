@@ -1,0 +1,11 @@
+controller: residual
+controller_mode: residual
+residual_scale: 0.2
+residual_action_clip: 0.3
+residual_zero_test: true
+max_steps: 2000
+seed: null
+num_repeats: 1
+task_name: pmsm_current_control
+test_conditions_path: configs/eval/pmsm_test_conditions.yaml
+

@@ -1,0 +1,31 @@
+algo: td3
+run_name: td3_physics_reward_v2_200k_seed0
+output_dir: outputs
+device: cpu
+seed: 0
+
+total_steps: 200000
+replay_capacity: 300000
+batch_size: 256
+warmup_steps: 10000
+update_after: 5000
+
+gamma: 0.99
+tau: 0.005
+lr_actor: 0.00005
+lr_critic: 0.001
+hidden_dim: 256
+
+exploration_noise: 0.10
+target_policy_noise: 0.20
+target_noise_clip: 0.50
+policy_delay: 2
+
+eval_every_steps: 10000
+eval_episodes: 3
+eval_config: configs/eval/default.yaml
+eval_scenario: test_1_nominal_step_tracking
+eval_metric: mean_return
+best_checkpoint_metric: rmse_all
+save_every_steps: 25000
+log_every_steps: 5000
