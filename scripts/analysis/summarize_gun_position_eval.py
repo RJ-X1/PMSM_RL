@@ -4,17 +4,38 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import csv
 import glob
+import math
 import sys
-
-import numpy as np
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.metrics import summarize_eval_csv
+
+SUMMARY_FIELDS = [
+    "source",
+    "controller",
+    "scenario",
+    "episode_return",
+    "episode_length",
+    "rmse_theta",
+    "mae_theta",
+    "max_abs_theta_error",
+    "steady_state_error_deg",
+    "rmse_omega",
+    "max_iq",
+    "control_energy",
+    "overshoot",
+    "settling_time",
+    "disturbance_recovery_time",
+    "speed_saturation_count",
+    "current_saturation_count",
+    "constraint_violation_count",
+    "done_reason",
+]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -34,26 +55,58 @@ def expand_globs(patterns: list[str]) -> list[str]:
     return csvs
 
 
-def _last_window_mean_abs(df: pd.DataFrame, column: str, *, fraction: float = 0.1) -> float:
-    if column not in df.columns or df.empty:
+def _read_csv_rows(path: str) -> list[dict[str, str]]:
+    with Path(path).open("r", newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _to_float(value: object, default: float = float("nan")) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if math.isfinite(out) else default
+
+
+def _first_row_value(rows: list[dict[str, str]], column: str, default: str) -> str:
+    if not rows:
+        return default
+    value = rows[0].get(column, "")
+    return str(value) if value not in (None, "") else default
+
+
+def _last_window_mean_abs(rows: list[dict[str, str]], column: str, *, fraction: float = 0.1) -> float:
+    if not rows or column not in rows[0]:
         return float("nan")
-    count = max(1, int(np.ceil(len(df) * fraction)))
-    return float(np.mean(np.abs(df[column].tail(count).astype(float))))
+    count = max(1, int(math.ceil(len(rows) * fraction)))
+    values = [_to_float(row.get(column)) for row in rows[-count:]]
+    finite_values = [abs(value) for value in values if math.isfinite(value)]
+    if not finite_values:
+        return float("nan")
+    return float(sum(finite_values) / len(finite_values))
+
+
+def _sum_flag(rows: list[dict[str, str]], column: str) -> int:
+    if not rows or column not in rows[0]:
+        return 0
+    return int(sum(1 for row in rows if _to_float(row.get(column), default=0.0) > 0.5))
 
 
 def summarize_one(path: str) -> dict[str, float | int | str]:
-    df = pd.read_csv(path)
+    rows = _read_csv_rows(path)
     summary = summarize_eval_csv(path)
     row: dict[str, float | int | str] = {
         "source": path,
-        "controller": str(summary.get("controller", df.get("controller", ["unknown"])[0])),
-        "scenario": str(summary.get("scenario", df.get("scenario", ["default"])[0])),
+        "controller": str(summary.get("controller", _first_row_value(rows, "controller", "unknown"))),
+        "scenario": str(summary.get("scenario", _first_row_value(rows, "scenario", "default"))),
         "episode_return": float(summary.get("episode_return", float("nan"))),
-        "episode_length": int(summary.get("episode_length", len(df))),
+        "episode_length": int(summary.get("episode_length", len(rows))),
         "rmse_theta": float(summary.get("rmse_theta", float("nan"))),
         "mae_theta": float(summary.get("mae_theta", float("nan"))),
         "max_abs_theta_error": float(summary.get("max_abs_theta_error", float("nan"))),
-        "steady_state_error_deg": _last_window_mean_abs(df, "e_theta_deg"),
+        "steady_state_error_deg": _last_window_mean_abs(rows, "e_theta_deg"),
         "rmse_omega": float(summary.get("rmse_omega", float("nan"))),
         "max_iq": float(summary.get("max_iq", float("nan"))),
         "control_energy": float(summary.get("control_energy", float("nan"))),
@@ -62,7 +115,7 @@ def summarize_one(path: str) -> dict[str, float | int | str]:
         "disturbance_recovery_time": float(summary.get("disturbance_recovery_time", float("nan"))),
         "speed_saturation_count": int(summary.get("speed_saturation_count", 0)),
         "current_saturation_count": int(summary.get("current_saturation_count", 0)),
-        "constraint_violation_count": int(df.get("constraint_violation", pd.Series(dtype=float)).fillna(0).sum()),
+        "constraint_violation_count": _sum_flag(rows, "constraint_violation"),
         "done_reason": str(summary.get("done_reason", "")),
     }
     return row
@@ -70,10 +123,15 @@ def summarize_one(path: str) -> dict[str, float | int | str]:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    rows = [summarize_one(path) for path in expand_globs(args.glob)]
-    out = pd.DataFrame(rows).sort_values(["scenario", "controller", "source"])
+    rows = sorted(
+        [summarize_one(path) for path in expand_globs(args.glob)],
+        key=lambda row: (str(row["scenario"]), str(row["controller"]), str(row["source"])),
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(args.output, index=False)
+    with args.output.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
     print(f"saved gun-servo summary: {args.output}")
 
 
