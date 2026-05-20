@@ -27,6 +27,8 @@ class GunLoadParams:
     backlash_rad: float = 0.0
     torsional_stiffness: float = 0.0
     torsional_damping: float = 0.0
+    output_torque_limit: float = float("inf")
+    friction_velocity_eps: float = 1e-3
 
 
 @dataclass(slots=True)
@@ -56,7 +58,8 @@ class SingleInertiaGunLoad:
 
     def motor_to_load_torque(self, motor_torque: float) -> float:
         """Map motor electromagnetic torque to load-side output torque."""
-        return float(self.params.gear_ratio) * float(self.params.efficiency) * float(motor_torque)
+        raw = float(self.params.gear_ratio) * float(self.params.efficiency) * float(motor_torque)
+        return float(np.clip(raw, -float(self.params.output_torque_limit), float(self.params.output_torque_limit)))
 
     def gravity_torque(self, theta: float) -> float:
         """Gravity imbalance torque at the load side."""
@@ -66,7 +69,7 @@ class SingleInertiaGunLoad:
 
     def coulomb_torque(self, omega: float) -> float:
         """Smooth Coulomb friction sign to avoid numerical chatter near zero."""
-        omega_smooth = 1e-3
+        omega_smooth = max(float(self.params.friction_velocity_eps), 1e-9)
         return float(self.params.coulomb_friction) * float(np.tanh(float(omega) / omega_smooth))
 
     def acceleration(

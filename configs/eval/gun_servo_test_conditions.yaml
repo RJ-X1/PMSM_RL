@@ -1,55 +1,92 @@
 test_scenarios:
-  - id: small_angle_step_tracking
-    name: Small-angle step tracking
+  - id: step_10deg
+    name: Step 10 deg
     reference:
       profile: step
-      theta_range_deg: [0.0, 5.0]
-      step_time_s: 0.2
-      randomize_on_reset: false
-    disturbance_torque_Nm: 0.0
-
-  - id: large_angle_trapezoidal_tracking
-    name: Large-angle trapezoidal tracking
-    reference:
-      profile: trapezoid
-      theta_range_deg: [-20.0, 25.0]
-      max_speed_deg_s: 55.0
-      max_accel_deg_s2: 180.0
+      theta_range_deg: [0.0, 10.0]
       step_time_s: 0.1
       randomize_on_reset: false
-    disturbance_torque_Nm: 0.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
 
-  - id: sinusoidal_tracking
-    name: Sinusoidal tracking
-    reference:
-      profile: sinusoidal
-      theta_range_deg: [-10.0, 10.0]
-      sine_frequency_hz: 0.2
-      randomize_on_reset: false
-    disturbance_torque_Nm: 0.0
-
-  - id: load_disturbance_rejection
-    name: Load disturbance rejection
+  - id: step_20deg
+    name: Step 20 deg
     reference:
       profile: step
-      theta_range_deg: [0.0, 8.0]
-      step_time_s: 0.2
+      theta_range_deg: [0.0, 20.0]
+      step_time_s: 0.1
       randomize_on_reset: false
-    disturbance_torque_Nm: 12.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
 
-  - id: inertia_friction_mismatch_robustness
-    name: Inertia/friction mismatch robustness test
+  - id: trapezoid_15deg
+    name: Trapezoid 15 deg
     reference:
       profile: trapezoid
       theta_range_deg: [-15.0, 15.0]
-      max_speed_deg_s: 45.0
-      max_accel_deg_s2: 150.0
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
       randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: sine_10deg_0p5hz
+    name: Sine 10 deg 0.5 Hz
+    reference:
+      profile: sinusoidal
+      theta_range_deg: [-10.0, 10.0]
+      sine_frequency_hz: 0.5
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: disturbance_150nm
+    name: 150 Nm load disturbance rejection
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 150.0
+      disturbance_step_time_s: 0.5
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: randomized_eval
+    name: Randomized parameter mismatch
+    reference:
+      profile: random_step
+      theta_range_deg: [-20.0, 20.0]
+      step_time_s: 0.15
+      randomize_on_reset: true
+    load:
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 10.0
     domain_randomization:
       enabled: true
-      J_load_scale_range: [1.3, 1.5]
-      B_load_scale_range: [1.2, 1.5]
-      friction_scale_range: [1.3, 1.8]
-      gravity_torque_scale_range: [1.1, 1.3]
-      disturbance_torque_range: [-10.0, 10.0]
-      encoder_noise_deg_range: [0.02, 0.05]
+      J_load_scale_range: [0.85, 1.25]
+      B_load_scale_range: [0.75, 1.35]
+      friction_scale_range: [0.75, 1.5]
+      gravity_torque_scale_range: [0.85, 1.2]
+      disturbance_torque_range: [-80.0, 80.0]
+      encoder_noise_rad_range: [0.0, 2.0e-5]

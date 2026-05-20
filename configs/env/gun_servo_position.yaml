@@ -1,68 +1,100 @@
 # Gun/fire-control servo position outer-loop RL simulation.
-# The project now focuses on trajectory tracking for a gun servo axis; the old
-# PMSM current-control env remains available in configs/env/pmsm_cc.yaml.
+# RL action is a normalized load-side speed correction. PMSM current-control
+# configs remain available under configs/env/pmsm_cc*.yaml.
 use_custom_env: true
 env_id: Custom-GunServo-Position-v0
 seed: 0
 
+gun_servo_env:
+  dt: 1.0e-3
+  integration_dt: 1.0e-4
+  episode_steps: 3000
+
 motor:
-  p: 4
-  Rs: 0.35
-  Ld: 2.8e-3
-  Lq: 3.2e-3
-  psi_f: 0.095
-  Jm: 1.2e-3
-  Bm: 1.5e-4
-  Vdc: 300.0
-  Umax: 173.0
-  Imax: 15.0
+  model: ISMG1-95C15CD-A331FA
+  pole_pairs: 4
+  rated_torque_nm: 50.0
+  max_torque_nm: 135.0
+  rated_speed_rpm: 1500.0
+  max_speed_rpm: 1800.0
+  rated_current_a: 15.4
+  max_current_a: 43.2
+  kt_nm_per_a: 3.24
+  rs_ohm: 0.480
+  ld_h: 8.08e-3
+  lq_h: 8.08e-3
+  jm_kg_m2: 7.5e-3
   Ts_current: 1.0e-4
-  Ts_speed: 5.0e-4
-  Ts_position: 2.0e-3
-  current_time_constant: 8.0e-4
+
+servo_drive:
+  model: IS650PT025IUX-B
+  mode: speed
+  current_limit_a: 43.2
+  speed_loop_gain_hz: 25.0
+  speed_loop_integral_time_ms: 31.83
+  torque_filter_time_ms: 0.79
+
+gearbox:
+  model: LHD-40-50-C-I
+  ratio: 50.0
+  efficiency_nominal: 0.70
+  backlash_arcmin: 2.0
+  torsional_stiffness_nm_per_rad: 11.6e4
+  torsional_damping_nms_per_rad: 0.0
+  output_torque_limit_nm: 1800.0
+  buckling_torque_nm: 3600.0
 
 load:
-  gear_ratio: 120.0
-  efficiency: 0.85
-  J_load: 85.0
-  B_load: 12.0
-  coulomb_friction: 3.0
-  gravity_torque_coeff: 45.0
-  gravity_phase: 0.0
-  backlash_rad: 0.0
-  torsional_stiffness: 0.0
-  torsional_damping: 0.0
+  theta_range_deg: [-30.0, 30.0]
+  omega_limit_deg_s: 30.0
+  alpha_limit_deg_s2: 150.0
+  inertia_kg_m2: 300.0
+  viscous_damping_nms_per_rad: 40.0
+  coulomb_friction_nm: 50.0
+  gravity_torque_coeff_nm: 300.0
+  gravity_phase_rad: 0.0
+  disturbance_torque_nm: 0.0
+  disturbance_step_nm: 150.0
+  disturbance_step_time_s: 1.0
+  disturbance_noise_std_nm: 20.0
+  friction_eps_rad_s: 1.0e-3
+  torque_scale: 1800.0
+
+load_encoder:
+  model: JKN-8A-H100
+  resolution_bits: 20
+  accuracy_arcsec: 2.0
+  noise_std_rad: 1.0e-5
+  delay_steps: 0
 
 environment:
-  episode_steps: 1500
+  episode_steps: 3000
   init_theta_range_deg: [0.0, 0.0]
   init_omega_range_deg_s: [0.0, 0.0]
-  max_abs_theta_deg: 85.0
+  max_abs_theta_deg: 30.0
 
 reference:
   profile: random_step
-  theta_range_deg: [-15.0, 15.0]
-  max_speed_deg_s: 45.0
-  max_accel_deg_s2: 160.0
+  theta_range_deg: [-20.0, 20.0]
+  max_speed_deg_s: 25.0
+  max_accel_deg_s2: 120.0
   step_time_s: 0.2
   sine_frequency_hz: 0.25
   randomize_on_reset: true
   theta_scale_deg: 30.0
-  omega_scale_deg_s: 90.0
-  encoder_noise_deg: 0.0
+  omega_scale_deg_s: 30.0
 
-rl_action:
-  type: delta_omega
-  max_delta_omega_deg_s: 50.0
-  max_omega_cmd_deg_s: 90.0
-  max_delta_omega_rate_deg_s2: 350.0
-  max_omega_cmd_accel_deg_s2: 350.0
-
-speed_controller:
-  kp: 18.0
-  ki: 80.0
-  integrator_limit: 12.0
-  iq_limit: 15.0
+rl_controller:
+  action_type: load_speed_delta
+  delta_omega_limit_deg_s: 30.0
+  omega_limit_deg_s: 30.0
+  delta_omega_rate_limit_deg_s2: 600.0
+  omega_cmd_accel_limit_deg_s2: 150.0
+  command_smoothing_time_s: 0.0
+  baseline_pid:
+    kp: 8.0
+    ki: 0.15
+    kd: 1.2
 
 reward:
   mode: quadratic_tracking
@@ -79,9 +111,8 @@ domain_randomization:
   B_load_scale_range: [0.7, 1.3]
   friction_scale_range: [0.7, 1.4]
   gravity_torque_scale_range: [0.8, 1.2]
-  disturbance_torque_range: [-8.0, 8.0]
-  encoder_noise_deg_range: [0.0, 0.03]
+  disturbance_torque_range: [-60.0, 60.0]
+  encoder_noise_rad_range: [0.0, 2.0e-5]
 
 gem_kwargs:
   visualization: null
-

@@ -1,0 +1,6 @@
+controller: pid
+max_steps: null
+seed: null
+num_repeats: 3
+task_name: gun_servo_position
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml

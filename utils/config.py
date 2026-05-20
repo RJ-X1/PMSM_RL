@@ -240,9 +240,14 @@ class EnvConfig:
     action_smoothness: ActionSmoothnessConfig = field(default_factory=ActionSmoothnessConfig)
     domain_randomization: DomainRandomizationConfig = field(default_factory=DomainRandomizationConfig)
     gun_motor: dict[str, Any] = field(default_factory=dict)
+    gun_servo_env: dict[str, Any] = field(default_factory=dict)
+    gun_servo_drive: dict[str, Any] = field(default_factory=dict)
+    gun_gearbox: dict[str, Any] = field(default_factory=dict)
     gun_load: dict[str, Any] = field(default_factory=dict)
+    gun_load_encoder: dict[str, Any] = field(default_factory=dict)
     gun_reference: dict[str, Any] = field(default_factory=dict)
     gun_rl_action: dict[str, Any] = field(default_factory=dict)
+    gun_rl_controller: dict[str, Any] = field(default_factory=dict)
     gun_reward: dict[str, Any] = field(default_factory=dict)
     gun_domain_randomization: dict[str, Any] = field(default_factory=dict)
     gun_environment: dict[str, Any] = field(default_factory=dict)
@@ -263,10 +268,15 @@ class EnvConfig:
             )
             return {
                 "env_id": str(self.env_id),
+                "gun_servo_env": dict(self.gun_servo_env),
                 "motor": dict(self.gun_motor),
+                "servo_drive": dict(self.gun_servo_drive),
+                "gearbox": dict(self.gun_gearbox),
                 "load": dict(self.gun_load),
+                "load_encoder": dict(self.gun_load_encoder),
                 "reference": dict(self.gun_reference),
                 "rl_action": dict(self.gun_rl_action),
+                "rl_controller": dict(self.gun_rl_controller),
                 "reward": dict(self.gun_reward),
                 "domain_randomization": dict(self.gun_domain_randomization),
                 "environment": dict(self.gun_environment),
@@ -888,9 +898,14 @@ def parse_env_config(path: str | Path) -> EnvConfig:
         ),
         domain_randomization=_parse_env_domain_randomization_config(data),
         gun_motor=gun_motor,
+        gun_servo_env=_as_mapping(data.get("gun_servo_env"), name="gun_servo_env"),
+        gun_servo_drive=_as_mapping(data.get("servo_drive"), name="servo_drive"),
+        gun_gearbox=_as_mapping(data.get("gearbox"), name="gearbox"),
         gun_load=_as_mapping(data.get("load"), name="load"),
+        gun_load_encoder=_as_mapping(data.get("load_encoder"), name="load_encoder"),
         gun_reference=_as_mapping(data.get("reference"), name="reference"),
         gun_rl_action=_as_mapping(data.get("rl_action"), name="rl_action"),
+        gun_rl_controller=_as_mapping(data.get("rl_controller"), name="rl_controller"),
         gun_reward=_as_mapping(data.get("reward"), name="reward"),
         gun_domain_randomization=gun_domain_randomization,
         gun_environment=_as_mapping(data.get("environment"), name="environment"),

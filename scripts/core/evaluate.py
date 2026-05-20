@@ -329,23 +329,34 @@ def _apply_test1_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> Any:
 
 
 def _apply_gun_servo_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> Any:
-    reference = dict(getattr(env_cfg, "gun_reference", {}) or {})
-    reference.update(condition.get("reference", {}) if isinstance(condition.get("reference"), dict) else {})
-    load = dict(getattr(env_cfg, "gun_load", {}) or {})
+    def merged_dict(field_name: str, condition_key: str) -> dict[str, Any]:
+        base = dict(getattr(env_cfg, field_name, {}) or {})
+        override = condition.get(condition_key)
+        if isinstance(override, dict):
+            base.update(override)
+        return base
+
+    reference = merged_dict("gun_reference", "reference")
+    load = merged_dict("gun_load", "load")
     if "disturbance_torque_Nm" in condition:
         load["disturbance_torque"] = float(condition["disturbance_torque_Nm"])
-    domain_randomization = dict(getattr(env_cfg, "gun_domain_randomization", {}) or {})
-    dr_override = condition.get("domain_randomization")
-    if isinstance(dr_override, dict):
-        domain_randomization.update(dr_override)
+    if "disturbance_step_Nm" in condition:
+        load["disturbance_step_nm"] = float(condition["disturbance_step_Nm"])
+    domain_randomization = merged_dict("gun_domain_randomization", "domain_randomization")
     if "disturbance_torque_Nm" in condition and "disturbance_torque_range" not in domain_randomization:
         value = float(condition["disturbance_torque_Nm"])
         domain_randomization["disturbance_torque_range"] = [value, value]
     return replace(
         env_cfg,
+        gun_servo_env=merged_dict("gun_servo_env", "gun_servo_env"),
+        gun_servo_drive=merged_dict("gun_servo_drive", "servo_drive"),
+        gun_gearbox=merged_dict("gun_gearbox", "gearbox"),
         gun_reference=reference,
         gun_load=load,
+        gun_load_encoder=merged_dict("gun_load_encoder", "load_encoder"),
+        gun_rl_controller=merged_dict("gun_rl_controller", "rl_controller"),
         gun_domain_randomization=domain_randomization,
+        gun_environment=merged_dict("gun_environment", "environment"),
     )
 
 
@@ -362,7 +373,7 @@ def _maybe_apply_eval_scenario(env_cfg: Any, eval_config_path: Path, scenario_na
             "applying fixed-speed step-reference eval overrides."
         )
         return _apply_test1_env_overrides(env_cfg, condition)
-    print(f"scenario={scenario_name} did not match supported Test-1; using env-config as-is.")
+    print(f"scenario={scenario_name} did not match a supported eval condition; using env-config as-is.")
     return env_cfg
 
 
@@ -534,13 +545,20 @@ def run_evaluation(
             "omega_cmd_deg_s",
             "iq_A",
             "Te_Nm",
+            "T_out_Nm",
             "TL_Nm",
+            "theta_meas_deg",
+            "action_raw",
+            "action_safe",
             "disturbance_torque_Nm",
             "saturation_flag",
             "speed_saturation_flag",
             "current_saturation_flag",
             "action_rate_saturation_flag",
             "accel_saturation_flag",
+            "motor_torque_saturation_flag",
+            "gear_torque_saturation_flag",
+            "constraint_violation",
         ]
     if residual_mode:
         fieldnames += _residual_csv_fieldnames()
@@ -671,7 +689,11 @@ def run_evaluation(
                         "omega_cmd_deg_s",
                         "iq_A",
                         "Te_Nm",
+                        "T_out_Nm",
                         "TL_Nm",
+                        "theta_meas_deg",
+                        "action_raw",
+                        "action_safe",
                         "disturbance_torque_Nm",
                     ):
                         value = _safe_float(_info.get(key))
@@ -683,6 +705,9 @@ def run_evaluation(
                         "current_saturation_flag",
                         "action_rate_saturation_flag",
                         "accel_saturation_flag",
+                        "motor_torque_saturation_flag",
+                        "gear_torque_saturation_flag",
+                        "constraint_violation",
                     ):
                         value = _safe_float(_info.get(key))
                         if value is not None:
