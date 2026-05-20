@@ -24,8 +24,18 @@ from envs.obs_parser import required_eval_trace_columns
 from utils.run_layout import infer_run_dir_from_path
 
 
-SUPPORTED_TASKS = ("pmsm_cc",)
+SUPPORTED_TASKS = ("pmsm_cc", "gun_servo_position")
 CUSTOM_TRACE_COLUMNS = ("i_d", "ref_i_d", "i_q", "ref_i_q", "act_u_d", "act_u_q")
+GUN_SERVO_TRACE_COLUMNS = (
+    "theta_ref_deg",
+    "theta_L_deg",
+    "e_theta_deg",
+    "omega_cmd_deg_s",
+    "omega_L_deg_s",
+    "iq_A",
+    "disturbance_torque_Nm",
+    "saturation_flag",
+)
 LEGACY_TRACE_COLUMNS = required_eval_trace_columns()
 OPTIONAL_REWARD_COLUMNS = (
     "reward",
@@ -104,6 +114,18 @@ def _detect_trace_layout(fieldnames: list[str], rows: list[dict[str, str]]) -> s
             )
         return "custom_dq"
 
+    if explicit_layout == "gun_servo_position":
+        missing = [name for name in GUN_SERVO_TRACE_COLUMNS if name not in available]
+        if missing:
+            raise KeyError(
+                "CSV declares layout=gun_servo_position but is missing required trace columns: "
+                f"{missing}"
+            )
+        return "gun_servo_position"
+
+    if all(name in available for name in GUN_SERVO_TRACE_COLUMNS):
+        return "gun_servo_position"
+
     if has_custom_columns:
         return "custom_dq"
 
@@ -127,7 +149,12 @@ def _load_eval_trace(csv_path: Path) -> LoadedTrace:
             raise ValueError(f"CSV contains no data rows: {csv_path}")
 
     layout = _detect_trace_layout(fieldnames, rows)
-    required_columns = CUSTOM_TRACE_COLUMNS if layout == "custom_dq" else LEGACY_TRACE_COLUMNS
+    if layout == "custom_dq":
+        required_columns = CUSTOM_TRACE_COLUMNS
+    elif layout == "gun_servo_position":
+        required_columns = GUN_SERVO_TRACE_COLUMNS
+    else:
+        required_columns = LEGACY_TRACE_COLUMNS
     missing = [name for name in required_columns if name not in fieldnames]
     if missing:
         raise KeyError(f"CSV is missing required trace columns for layout '{layout}': {missing}")
@@ -268,6 +295,37 @@ def _plot_legacy_trace(_fig: plt.Figure, axes: np.ndarray, trace: LoadedTrace) -
     return list(axes)
 
 
+def _plot_gun_servo_trace(_fig: plt.Figure, axes: np.ndarray, trace: LoadedTrace) -> list[plt.Axes]:
+    x = trace.x
+    data = trace.data
+
+    axes[0].plot(x, data["theta_ref_deg"], label="theta_ref", color="tab:orange", linestyle="--", linewidth=1.6)
+    axes[0].plot(x, data["theta_L_deg"], label="theta_L", color="tab:blue", linewidth=1.8)
+    axes[0].set_ylabel("position [deg]")
+    axes[0].legend(loc="best")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(x, data["e_theta_deg"], label="e_theta", color="tab:red", linewidth=1.6)
+    axes[1].set_ylabel("error [deg]")
+    axes[1].legend(loc="best")
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].plot(x, data["omega_cmd_deg_s"], label="omega_cmd", color="tab:purple", linewidth=1.6)
+    axes[2].plot(x, data["omega_L_deg_s"], label="omega_L", color="tab:green", linewidth=1.6)
+    axes[2].set_ylabel("speed [deg/s]")
+    axes[2].legend(loc="best")
+    axes[2].grid(True, alpha=0.3)
+
+    axes[3].plot(x, data["iq_A"], label="iq", color="tab:brown", linewidth=1.5)
+    axes[3].plot(x, data["disturbance_torque_Nm"], label="disturbance", color="tab:gray", linewidth=1.2)
+    axes[3].step(x, data["saturation_flag"], where="post", label="saturation", color="tab:red", linewidth=1.0)
+    axes[3].set_ylabel("iq / torque")
+    axes[3].set_xlabel("step")
+    axes[3].legend(loc="best")
+    axes[3].grid(True, alpha=0.3)
+    return list(axes)
+
+
 def create_episode_trace_plot(*, csv_path: Path, output_path: Path, task: str = "pmsm_cc", title_suffix: str = "") -> Path:
     if task not in SUPPORTED_TASKS:
         raise ValueError(f"Unsupported task: {task}")
@@ -277,6 +335,8 @@ def create_episode_trace_plot(*, csv_path: Path, output_path: Path, task: str = 
 
     if trace.layout == "custom_dq":
         plotted_axes = _plot_custom_dq_trace(fig, axes, trace)
+    elif trace.layout == "gun_servo_position":
+        plotted_axes = _plot_gun_servo_trace(fig, axes, trace)
     else:
         plotted_axes = _plot_legacy_trace(fig, axes, trace)
 

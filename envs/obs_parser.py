@@ -34,6 +34,19 @@ CUSTOM_OBSERVATION_NAMES = (
 CUSTOM_ACTION_NAMES = ("act_u_d", "act_u_q")
 # The custom PMSM environment keeps these fixed signal names but exposes them
 # as normalized observation values for RL-facing code.
+GUN_SERVO_OBSERVATION_NAMES = (
+    "e_theta",
+    "e_omega",
+    "theta_ref",
+    "theta_L",
+    "omega_L",
+    "prev_action",
+    "iq",
+    "T_L_hat",
+    "omega_cmd",
+    "saturation_flag",
+)
+GUN_SERVO_ACTION_NAMES = ("act_delta_omega",)
 
 ABC_STATE_NAMES = [
     "omega",
@@ -218,6 +231,21 @@ def _is_custom_pmsm_env(*, env_id: str, obs_dim: int, act_dim: int, env: Any | N
     )
 
 
+def _is_gun_servo_position_env(*, env_id: str, obs_dim: int, act_dim: int, env: Any | None = None) -> bool:
+    obj = getattr(env, "unwrapped", env)
+    if bool(getattr(obj, "is_gun_servo_position_env", False)):
+        return True
+    names = getattr(obj, "observation_names", None)
+    if names and list(names) == list(GUN_SERVO_OBSERVATION_NAMES):
+        return True
+    env_id_lower = str(env_id).lower()
+    return (
+        "gunservo" in env_id_lower
+        or "gun-servo" in env_id_lower
+        or ("gun" in env_id_lower and obs_dim == len(GUN_SERVO_OBSERVATION_NAMES) and act_dim == 1)
+    )
+
+
 def _custom_observation_spec(env_id: str) -> ObservationSpec:
     return ObservationSpec(
         env_id=env_id,
@@ -226,6 +254,17 @@ def _custom_observation_spec(env_id: str) -> ObservationSpec:
         reference_names=["ref_i_d", "ref_i_q"],
         extra_names=["e_d", "e_q", "prev_u_d", "prev_u_q", "T_L"],
         action_names=list(CUSTOM_ACTION_NAMES),
+    )
+
+
+def _gun_servo_observation_spec(env_id: str) -> ObservationSpec:
+    return ObservationSpec(
+        env_id=env_id,
+        layout="gun_servo_position",
+        state_names=["e_theta", "e_omega", "theta_ref", "theta_L", "omega_L"],
+        reference_names=[],
+        extra_names=["prev_action", "iq", "T_L_hat", "omega_cmd", "saturation_flag"],
+        action_names=list(GUN_SERVO_ACTION_NAMES),
     )
 
 
@@ -297,6 +336,8 @@ def infer_observation_spec(
 
     if _is_custom_pmsm_env(env_id=env_id, obs_dim=obs_dim, act_dim=act_dim, env=env):
         return _custom_observation_spec(env_id)
+    if _is_gun_servo_position_env(env_id=env_id, obs_dim=obs_dim, act_dim=act_dim, env=env):
+        return _gun_servo_observation_spec(env_id)
 
     layout = _infer_layout(env_id=env_id, act_dim=act_dim)
     introspection = introspect_env(env) if env is not None else EnvIntrospection()
@@ -376,6 +417,8 @@ def required_eval_trace_columns(layout: str | None = None) -> tuple[str, ...]:
     """Return the standard trace columns expected in PMSM eval CSVs."""
     if layout == "custom_dq":
         return ("i_d", "ref_i_d", "i_q", "ref_i_q")
+    if layout == "gun_servo_position":
+        return ("e_theta", "e_omega", "theta_ref", "theta_L", "omega_L", "act_delta_omega")
     return (*TRACE_SIGNAL_NAMES, *TRACE_ACTION_NAMES)
 
 

@@ -1,4 +1,4 @@
-"""PMSM current-control environment builder."""
+"""Environment builder for PMSM current-control and gun-servo position tasks."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, Literal
 import gymnasium as gym
 
 from envs.pmsm_current_env import PMSMCurrentControlEnv
+from envs.gun_servo_position_env import GunServoPositionEnv
 from envs.wrappers import apply_common_wrappers, make_eval_wrappers, make_train_wrappers
 
 Mode = Literal["train", "eval"]
@@ -49,9 +50,11 @@ def _make_raw_gem_env(config: EnvBuildConfig) -> gym.Env:
 
 
 def _make_raw_custom_env(config: EnvBuildConfig) -> gym.Env:
-    """Create the lightweight custom PMSM current-control environment."""
+    """Create one of the lightweight custom environments."""
     kwargs = dict(config.custom_env_kwargs)
     kwargs.setdefault("env_id", config.env_id)
+    if str(config.env_id) == "Custom-GunServo-Position-v0":
+        return GunServoPositionEnv(**kwargs)
     return PMSMCurrentControlEnv(**kwargs)
 
 

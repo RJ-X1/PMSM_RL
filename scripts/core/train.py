@@ -137,8 +137,8 @@ def _resolve_best_checkpoint_metric(train_cfg: Any) -> str:
     requested = str(getattr(train_cfg, "best_checkpoint_metric", "mean_return")).strip().lower()
     if requested in {"mean_return", "mean_eval_return"}:
         return "mean_return"
-    if requested == "rmse_all":
-        return "rmse_all"
+    if requested in {"rmse_all", "rmse_theta"}:
+        return requested
     print(
         f"best_checkpoint_metric={requested!r} is not supported by the lightweight "
         "training evaluator; using mean_return."
@@ -233,6 +233,21 @@ def _collect_eval_metric_row(
     action_high: float,
 ) -> dict[str, float]:
     base_env = getattr(env, "unwrapped", env)
+    if bool(getattr(base_env, "is_gun_servo_position_env", False)):
+        info = info or {}
+        return {
+            "time_s": float(step) * float(getattr(base_env, "dt", 1.0)),
+            "theta_ref_deg": _safe_metric_float(info.get("theta_ref_deg")),
+            "theta_L_deg": _safe_metric_float(info.get("theta_L_deg")),
+            "e_theta_deg": _safe_metric_float(info.get("e_theta_deg")),
+            "omega_ref_deg_s": _safe_metric_float(info.get("omega_ref_deg_s")),
+            "omega_L_deg_s": _safe_metric_float(info.get("omega_L_deg_s")),
+            "omega_cmd_deg_s": _safe_metric_float(info.get("omega_cmd_deg_s")),
+            "iq_A": _safe_metric_float(info.get("iq_A")),
+            "saturation_flag": _safe_metric_float(info.get("saturation_flag")),
+            "speed_saturation_flag": _safe_metric_float(info.get("speed_saturation_flag")),
+            "current_saturation_flag": _safe_metric_float(info.get("current_saturation_flag")),
+        }
     scales = getattr(base_env, "observation_normalization_scales", {})
     motor_params = getattr(base_env, "motor_params", None)
     current_scale = _safe_metric_float(scales.get("current", float("nan")))
@@ -274,6 +289,28 @@ def _summarize_eval_metric_rows(rows: list[dict[str, float]]) -> dict[str, float
             "pre_rmse_all": float("nan"),
             "post_rmse_all": float("nan"),
             "saturation_count": float("nan"),
+        }
+    if {"theta_ref_deg", "theta_L_deg"}.issubset(rows[0].keys()):
+        theta_ref = np.asarray([row["theta_ref_deg"] for row in rows], dtype=np.float64)
+        theta = np.asarray([row["theta_L_deg"] for row in rows], dtype=np.float64)
+        omega_ref = np.asarray([row.get("omega_ref_deg_s", np.nan) for row in rows], dtype=np.float64)
+        omega = np.asarray([row.get("omega_L_deg_s", np.nan) for row in rows], dtype=np.float64)
+        iq = np.asarray([row.get("iq_A", np.nan) for row in rows], dtype=np.float64)
+        speed_sat = np.asarray([row.get("speed_saturation_flag", 0.0) for row in rows], dtype=np.float64)
+        current_sat = np.asarray([row.get("current_saturation_flag", 0.0) for row in rows], dtype=np.float64)
+        e_theta = theta_ref - theta
+        e_omega = omega_ref - omega
+        finite_omega = np.isfinite(e_omega)
+        return {
+            "rmse_theta": float(np.sqrt(np.nanmean(e_theta**2))),
+            "mae_theta": float(np.nanmean(np.abs(e_theta))),
+            "max_abs_theta_error": float(np.nanmax(np.abs(e_theta))),
+            "rmse_omega": float(np.sqrt(np.nanmean(e_omega[finite_omega] ** 2))) if np.any(finite_omega) else float("nan"),
+            "max_iq": float(np.nanmax(np.abs(iq))) if np.any(np.isfinite(iq)) else float("nan"),
+            "control_energy": float(np.nansum(iq**2)),
+            "speed_saturation_count": float(np.nansum(speed_sat > 0.5)),
+            "current_saturation_count": float(np.nansum(current_sat > 0.5)),
+            "saturation_count": float(np.nansum((speed_sat > 0.5) | (current_sat > 0.5))),
         }
     required = {"i_d_phys", "i_q_phys", "ref_i_d_phys", "ref_i_q_phys"}
     if any(not required.issubset(row.keys()) for row in rows):
@@ -384,6 +421,8 @@ def _evaluate_policy_with_metrics(
 def _best_metric_value(metrics: dict[str, float], metric_name: str) -> float:
     if metric_name == "rmse_all":
         return float(metrics.get("rmse_all", float("nan")))
+    if metric_name == "rmse_theta":
+        return float(metrics.get("rmse_theta", float("nan")))
     return float(metrics.get("mean_return", float("nan")))
 
 
@@ -392,7 +431,7 @@ def _is_better_metric(candidate: float, current_best: float | None, metric_name:
         return False
     if current_best is None or not np.isfinite(float(current_best)):
         return True
-    if metric_name == "rmse_all":
+    if metric_name in {"rmse_all", "rmse_theta"}:
         return float(candidate) < float(current_best)
     return float(candidate) > float(current_best)
 
@@ -577,6 +616,8 @@ def main() -> None:
                 "eval_rmse_i_d",
                 "eval_rmse_i_q",
                 "eval_rmse_all",
+                "eval_rmse_theta",
+                "eval_mae_theta",
                 "eval_mae_all",
                 "eval_pre_rmse_all",
                 "eval_post_rmse_all",
@@ -649,6 +690,7 @@ def main() -> None:
                     f"episodes={eval_episodes} scenario={eval_scenario or 'env-config'} "
                     f"mean_return={latest_eval_return:.3f} "
                     f"rmse_all={float(latest_eval_metrics.get('rmse_all', float('nan'))):.6f} "
+                    f"rmse_theta={float(latest_eval_metrics.get('rmse_theta', float('nan'))):.6f} "
                     f"pre_rmse_all={float(latest_eval_metrics.get('pre_rmse_all', float('nan'))):.6f} "
                     f"post_rmse_all={float(latest_eval_metrics.get('post_rmse_all', float('nan'))):.6f}"
                 )
@@ -657,11 +699,13 @@ def main() -> None:
                     best_eval_metric_value = float(candidate_metric)
                     agent.save_checkpoint(best_ckpt)
                     metadata_metric_name = (
-                        "eval_rmse_all" if best_checkpoint_metric == "rmse_all" else "mean_eval_return"
+                        f"eval_{best_checkpoint_metric}"
+                        if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
+                        else "mean_eval_return"
                     )
                     selection_reason = (
-                        "periodic_eval_rmse_all_improved"
-                        if best_checkpoint_metric == "rmse_all"
+                        f"periodic_eval_{best_checkpoint_metric}_improved"
+                        if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
                         else "periodic_eval_return_improved"
                     )
                     _write_best_checkpoint_metadata(
@@ -715,6 +759,8 @@ def main() -> None:
                         "eval_rmse_i_d": latest_eval_metrics.get("rmse_i_d", ""),
                         "eval_rmse_i_q": latest_eval_metrics.get("rmse_i_q", ""),
                         "eval_rmse_all": latest_eval_metrics.get("rmse_all", ""),
+                        "eval_rmse_theta": latest_eval_metrics.get("rmse_theta", ""),
+                        "eval_mae_theta": latest_eval_metrics.get("mae_theta", ""),
                         "eval_mae_all": latest_eval_metrics.get("mae_all", ""),
                         "eval_pre_rmse_all": latest_eval_metrics.get("pre_rmse_all", ""),
                         "eval_post_rmse_all": latest_eval_metrics.get("post_rmse_all", ""),
@@ -760,6 +806,8 @@ def main() -> None:
                     "eval_rmse_i_d": latest_eval_metrics.get("rmse_i_d", ""),
                     "eval_rmse_i_q": latest_eval_metrics.get("rmse_i_q", ""),
                     "eval_rmse_all": latest_eval_metrics.get("rmse_all", ""),
+                    "eval_rmse_theta": latest_eval_metrics.get("rmse_theta", ""),
+                    "eval_mae_theta": latest_eval_metrics.get("mae_theta", ""),
                     "eval_mae_all": latest_eval_metrics.get("mae_all", ""),
                     "eval_pre_rmse_all": latest_eval_metrics.get("pre_rmse_all", ""),
                     "eval_post_rmse_all": latest_eval_metrics.get("post_rmse_all", ""),
@@ -777,7 +825,11 @@ def main() -> None:
             best_ckpt_meta,
             checkpoint_path=best_ckpt,
             global_step=total_steps,
-            metric_name="eval_rmse_all" if best_checkpoint_metric == "rmse_all" else "mean_eval_return",
+            metric_name=(
+                f"eval_{best_checkpoint_metric}"
+                if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
+                else "mean_eval_return"
+            ),
             metric_value=None,
             agent_name=agent_name,
             env_id=str(env_cfg.env_id),

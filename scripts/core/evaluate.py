@@ -16,6 +16,9 @@ from typing import Any
 
 import numpy as np
 
+from baselines.cascade_servo_controller import CascadeServoController, CascadeServoControllerConfig
+from baselines.pid_position_controller import PIDPositionControllerConfig
+from baselines.pi_speed_controller import PISpeedControllerConfig
 from baselines.pi_current_controller import PICurrentController
 from envs.make_env import make_eval_env
 from envs.obs_parser import build_observation_spec, parse_flat_observation, required_eval_trace_columns
@@ -50,6 +53,7 @@ RAD_PER_SEC_TO_RPM = 60.0 / (2.0 * np.pi)
 DEFAULT_SCENARIO_NAME = "default"
 TEST1_SCENARIO_KEYS = {"test1", "test1nominalsteptracking"}
 TEST1_REFERENCE_STEP_TIME_S = 0.02
+GUN_SERVO_ENV_ID = "Custom-GunServo-Position-v0"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -66,7 +70,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="best",
         help="Preferred RL checkpoint alias when --checkpoint is not provided.",
     )
-    parser.add_argument("--controller", choices=("rl", "pi", "residual", "pi_rl_residual"), default="rl")
+    parser.add_argument("--controller", choices=("rl", "pi", "pid", "residual", "pi_rl_residual"), default="rl")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
     parser.add_argument("--output-csv", type=Path, default=None)
@@ -138,6 +142,36 @@ def _make_pi_controller(
     )
     pi.reset()
     return pi
+
+
+def _make_cascade_servo_controller(*, spec: Any, env: Any) -> CascadeServoController:
+    base_env = getattr(env, "unwrapped", env)
+    scales = getattr(base_env, "observation_normalization_scales", {})
+    max_delta_omega = float(getattr(base_env, "max_delta_omega", np.deg2rad(50.0)))
+    iq_limit = float(getattr(base_env, "Imax", 12.0))
+    speed_pi = getattr(base_env, "speed_pi", None)
+    speed_cfg = getattr(speed_pi, "config", None)
+    config = CascadeServoControllerConfig(
+        position=PIDPositionControllerConfig(
+            kp=float(getattr(base_env, "baseline_position_kp", 8.0)),
+            ki=float(getattr(base_env, "baseline_position_ki", 0.0)),
+            kd=float(getattr(base_env, "baseline_position_kd", 1.2)),
+            integrator_limit=float(np.deg2rad(30.0)),
+            max_delta_omega=max_delta_omega,
+        ),
+        speed=PISpeedControllerConfig(
+            kp=float(getattr(speed_cfg, "kp", 18.0)),
+            ki=float(getattr(speed_cfg, "ki", 80.0)),
+            integrator_limit=float(getattr(speed_cfg, "integrator_limit", 0.75 * iq_limit)),
+            iq_limit=float(getattr(speed_cfg, "iq_limit", iq_limit)),
+        ),
+        theta_scale=float(scales.get("theta", np.deg2rad(30.0))),
+        omega_scale=float(scales.get("omega", np.deg2rad(90.0))),
+        dt=float(getattr(base_env, "dt", 0.002)),
+    )
+    controller = CascadeServoController(signal_names=spec.signal_names, config=config)
+    controller.reset()
+    return controller
 
 
 def _residual_csv_fieldnames() -> list[str]:
@@ -294,10 +328,34 @@ def _apply_test1_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> Any:
     )
 
 
+def _apply_gun_servo_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> Any:
+    reference = dict(getattr(env_cfg, "gun_reference", {}) or {})
+    reference.update(condition.get("reference", {}) if isinstance(condition.get("reference"), dict) else {})
+    load = dict(getattr(env_cfg, "gun_load", {}) or {})
+    if "disturbance_torque_Nm" in condition:
+        load["disturbance_torque"] = float(condition["disturbance_torque_Nm"])
+    domain_randomization = dict(getattr(env_cfg, "gun_domain_randomization", {}) or {})
+    dr_override = condition.get("domain_randomization")
+    if isinstance(dr_override, dict):
+        domain_randomization.update(dr_override)
+    if "disturbance_torque_Nm" in condition and "disturbance_torque_range" not in domain_randomization:
+        value = float(condition["disturbance_torque_Nm"])
+        domain_randomization["disturbance_torque_range"] = [value, value]
+    return replace(
+        env_cfg,
+        gun_reference=reference,
+        gun_load=load,
+        gun_domain_randomization=domain_randomization,
+    )
+
+
 def _maybe_apply_eval_scenario(env_cfg: Any, eval_config_path: Path, scenario_name: str | None) -> Any:
     if scenario_name in (None, ""):
         return env_cfg
     condition = _find_eval_condition(eval_config_path, str(scenario_name))
+    if condition is not None and str(getattr(env_cfg, "env_id", "")) == GUN_SERVO_ENV_ID:
+        print(f"scenario={scenario_name} matched gun-servo eval condition; applying overrides.")
+        return _apply_gun_servo_env_overrides(env_cfg, condition)
     if condition is not None and _is_test1_condition(condition):
         print(
             f"scenario={scenario_name} matched Test-1 nominal step tracking; "
@@ -370,6 +428,8 @@ def run_evaluation(
     action_smoothness_weight = float(getattr(base_env, "action_smoothness_weight", 0.0))
     motor_params = getattr(base_env, "motor_params", None)
     sim_dt = _safe_float(getattr(motor_params, "Ts", None))
+    if sim_dt is None:
+        sim_dt = _safe_float(getattr(base_env, "dt", None))
     missing_trace_columns = [
         name
         for name in required_eval_trace_columns(layout=spec.layout)
@@ -410,12 +470,21 @@ def run_evaluation(
             def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
                 return agent.select_action(policy_obs, add_noise=False), None
 
-    elif controller_name == "pi":
+    elif controller_name in {"pi", "pid"}:
         resolved_checkpoint = checkpoint_path
-        pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
+        if spec.layout == "gun_servo_position":
+            cascade = _make_cascade_servo_controller(spec=spec, env=env)
 
-        def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
-            return pi.compute_action(policy_obs), None
+            def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
+                return cascade.compute_action(policy_obs), None
+
+        else:
+            if controller_name == "pid":
+                raise ValueError("controller=pid is only supported for layout=gun_servo_position")
+            pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
+
+            def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
+                return pi.compute_action(policy_obs), None
     else:
         raise ValueError(f"Unsupported controller: {controller_name}")
 
@@ -455,9 +524,28 @@ def run_evaluation(
         "active_Umax",
         "action_saturated",
     ]
+    if spec.layout == "gun_servo_position":
+        fieldnames += [
+            "theta_ref_deg",
+            "theta_L_deg",
+            "e_theta_deg",
+            "omega_ref_deg_s",
+            "omega_L_deg_s",
+            "omega_cmd_deg_s",
+            "iq_A",
+            "Te_Nm",
+            "TL_Nm",
+            "disturbance_torque_Nm",
+            "saturation_flag",
+            "speed_saturation_flag",
+            "current_saturation_flag",
+            "action_rate_saturation_flag",
+            "accel_saturation_flag",
+        ]
     if residual_mode:
         fieldnames += _residual_csv_fieldnames()
     fieldnames += signal_fieldnames + spec.action_names + reward_term_names
+    fieldnames = list(dict.fromkeys(fieldnames))
 
     with final_output_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -522,6 +610,34 @@ def run_evaluation(
                     row["speed_rpm"] = omega_m_phys * RAD_PER_SEC_TO_RPM
                 if load_scale is not None and "T_L" in parsed_obs:
                     row["load_torque_nm"] = float(parsed_obs["T_L"]) * load_scale
+            elif spec.layout == "gun_servo_position":
+                scales = getattr(base_env, "observation_normalization_scales", {})
+                theta_scale = _safe_float(scales.get("theta"))
+                omega_scale = _safe_float(scales.get("omega"))
+                current_scale = _safe_float(scales.get("current"))
+                torque_scale = _safe_float(scales.get("torque"))
+                if theta_scale is not None:
+                    if "e_theta" in parsed_obs:
+                        row["e_theta_deg"] = float(parsed_obs["e_theta"]) * theta_scale * (180.0 / np.pi)
+                    if "theta_ref" in parsed_obs:
+                        row["theta_ref_deg"] = float(parsed_obs["theta_ref"]) * theta_scale * (180.0 / np.pi)
+                    if "theta_L" in parsed_obs:
+                        row["theta_L_deg"] = float(parsed_obs["theta_L"]) * theta_scale * (180.0 / np.pi)
+                if omega_scale is not None:
+                    if "e_omega" in parsed_obs:
+                        row["omega_ref_deg_s"] = (
+                            float(parsed_obs["e_omega"]) + float(parsed_obs.get("omega_L", 0.0))
+                        ) * omega_scale * (180.0 / np.pi)
+                    if "omega_L" in parsed_obs:
+                        row["omega_L_deg_s"] = float(parsed_obs["omega_L"]) * omega_scale * (180.0 / np.pi)
+                    if "omega_cmd" in parsed_obs:
+                        row["omega_cmd_deg_s"] = float(parsed_obs["omega_cmd"]) * omega_scale * (180.0 / np.pi)
+                if current_scale is not None and "iq" in parsed_obs:
+                    row["iq_A"] = float(parsed_obs["iq"]) * current_scale
+                if torque_scale is not None and "T_L_hat" in parsed_obs:
+                    row["TL_Nm"] = float(parsed_obs["T_L_hat"]) * torque_scale
+                if "saturation_flag" in parsed_obs:
+                    row["saturation_flag"] = int(float(parsed_obs["saturation_flag"]) > 0.5)
             if isinstance(_info, dict):
                 u_d = _safe_float(_info.get("prev_u_d"))
                 u_q = _safe_float(_info.get("prev_u_q"))
@@ -545,6 +661,32 @@ def run_evaluation(
                     row["action_saturated"] = int(
                         saturation_error > (1e-6 * max(1.0, abs(active_umax)))
                     )
+                if spec.layout == "gun_servo_position":
+                    for key in (
+                        "theta_ref_deg",
+                        "theta_L_deg",
+                        "e_theta_deg",
+                        "omega_ref_deg_s",
+                        "omega_L_deg_s",
+                        "omega_cmd_deg_s",
+                        "iq_A",
+                        "Te_Nm",
+                        "TL_Nm",
+                        "disturbance_torque_Nm",
+                    ):
+                        value = _safe_float(_info.get(key))
+                        if value is not None:
+                            row[key] = value
+                    for key in (
+                        "saturation_flag",
+                        "speed_saturation_flag",
+                        "current_saturation_flag",
+                        "action_rate_saturation_flag",
+                        "accel_saturation_flag",
+                    ):
+                        value = _safe_float(_info.get(key))
+                        if value is not None:
+                            row[key] = int(value > 0.5)
             if reward_term_names:
                 reward_terms = _info.get("reward_terms", {}) if isinstance(_info, dict) else {}
                 row.update({name: float(reward_terms.get(name, 0.0)) for name in reward_term_names})
@@ -559,7 +701,7 @@ def run_evaluation(
         "agent_name": (
             f"pi+{resolve_agent_name(train_cfg)}_residual"
             if residual_mode
-            else resolve_agent_name(train_cfg) if controller_name == "rl" else "pi"
+            else resolve_agent_name(train_cfg) if controller_name == "rl" else "cascade_pid" if spec.layout == "gun_servo_position" else "pi"
         ),
         "env_id": env_cfg.env_id,
         "layout": spec.layout,

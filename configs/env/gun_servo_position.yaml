@@ -1,0 +1,87 @@
+# Gun/fire-control servo position outer-loop RL simulation.
+# The project now focuses on trajectory tracking for a gun servo axis; the old
+# PMSM current-control env remains available in configs/env/pmsm_cc.yaml.
+use_custom_env: true
+env_id: Custom-GunServo-Position-v0
+seed: 0
+
+motor:
+  p: 4
+  Rs: 0.35
+  Ld: 2.8e-3
+  Lq: 3.2e-3
+  psi_f: 0.095
+  Jm: 1.2e-3
+  Bm: 1.5e-4
+  Vdc: 300.0
+  Umax: 173.0
+  Imax: 15.0
+  Ts_current: 1.0e-4
+  Ts_speed: 5.0e-4
+  Ts_position: 2.0e-3
+  current_time_constant: 8.0e-4
+
+load:
+  gear_ratio: 120.0
+  efficiency: 0.85
+  J_load: 85.0
+  B_load: 12.0
+  coulomb_friction: 3.0
+  gravity_torque_coeff: 45.0
+  gravity_phase: 0.0
+  backlash_rad: 0.0
+  torsional_stiffness: 0.0
+  torsional_damping: 0.0
+
+environment:
+  episode_steps: 1500
+  init_theta_range_deg: [0.0, 0.0]
+  init_omega_range_deg_s: [0.0, 0.0]
+  max_abs_theta_deg: 85.0
+
+reference:
+  profile: random_step
+  theta_range_deg: [-15.0, 15.0]
+  max_speed_deg_s: 45.0
+  max_accel_deg_s2: 160.0
+  step_time_s: 0.2
+  sine_frequency_hz: 0.25
+  randomize_on_reset: true
+  theta_scale_deg: 30.0
+  omega_scale_deg_s: 90.0
+  encoder_noise_deg: 0.0
+
+rl_action:
+  type: delta_omega
+  max_delta_omega_deg_s: 50.0
+  max_omega_cmd_deg_s: 90.0
+  max_delta_omega_rate_deg_s2: 350.0
+  max_omega_cmd_accel_deg_s2: 350.0
+
+speed_controller:
+  kp: 18.0
+  ki: 80.0
+  integrator_limit: 12.0
+  iq_limit: 15.0
+
+reward:
+  mode: quadratic_tracking
+  w_theta: 8.0
+  w_omega: 0.15
+  w_iq: 0.01
+  w_action_smoothness: 0.02
+  w_saturation: 0.25
+  w_terminal: 2.0
+
+domain_randomization:
+  enabled: true
+  J_load_scale_range: [0.8, 1.2]
+  B_load_scale_range: [0.7, 1.3]
+  friction_scale_range: [0.7, 1.4]
+  gravity_torque_scale_range: [0.8, 1.2]
+  disturbance_torque_range: [-8.0, 8.0]
+  encoder_noise_deg_range: [0.0, 0.03]
+
+gem_kwargs:
+  visualization: null
+

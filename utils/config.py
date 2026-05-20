@@ -225,7 +225,7 @@ class DomainRandomizationConfig:
 
 @dataclass(slots=True)
 class EnvConfig:
-    """Environment configuration supporting both GEM and custom PMSM modes."""
+    """Environment configuration supporting GEM, PMSM, and gun-servo custom modes."""
 
     env_id: str = "Cont-CC-PMSM-v0"
     seed: int = 0
@@ -239,14 +239,40 @@ class EnvConfig:
     reward: RewardConfig = field(default_factory=RewardConfig)
     action_smoothness: ActionSmoothnessConfig = field(default_factory=ActionSmoothnessConfig)
     domain_randomization: DomainRandomizationConfig = field(default_factory=DomainRandomizationConfig)
+    gun_motor: dict[str, Any] = field(default_factory=dict)
+    gun_load: dict[str, Any] = field(default_factory=dict)
+    gun_reference: dict[str, Any] = field(default_factory=dict)
+    gun_rl_action: dict[str, Any] = field(default_factory=dict)
+    gun_reward: dict[str, Any] = field(default_factory=dict)
+    gun_domain_randomization: dict[str, Any] = field(default_factory=dict)
+    gun_environment: dict[str, Any] = field(default_factory=dict)
+    gun_speed_controller: dict[str, Any] = field(default_factory=dict)
 
     def to_custom_env_kwargs(self, *, apply_domain_randomization: bool | None = None) -> dict[str, Any]:
-        """Build kwargs for :class:`envs.pmsm_current_env.PMSMCurrentControlEnv`."""
+        """Build kwargs for the selected custom environment."""
         effective_apply_dr = (
             bool(self.domain_randomization.enabled)
             if apply_domain_randomization is None
             else bool(apply_domain_randomization)
         )
+        if str(self.env_id) == "Custom-GunServo-Position-v0":
+            effective_gun_dr = (
+                bool(self.gun_domain_randomization.get("enabled", False))
+                if apply_domain_randomization is None
+                else bool(apply_domain_randomization)
+            )
+            return {
+                "env_id": str(self.env_id),
+                "motor": dict(self.gun_motor),
+                "load": dict(self.gun_load),
+                "reference": dict(self.gun_reference),
+                "rl_action": dict(self.gun_rl_action),
+                "reward": dict(self.gun_reward),
+                "domain_randomization": dict(self.gun_domain_randomization),
+                "environment": dict(self.gun_environment),
+                "speed_controller": dict(self.gun_speed_controller),
+                "apply_domain_randomization": effective_gun_dr,
+            }
         return {
             "env_id": str(self.env_id),
             "motor_params": self.motor.to_motor_params(),
@@ -838,8 +864,15 @@ def parse_env_config(path: str | Path) -> EnvConfig:
     defaults = EnvConfig()
     gem_kwargs = _as_mapping(data.get("gem_kwargs"), name="gem_kwargs")
     reward_cfg = _parse_env_reward_config(data)
+    env_id = str(data.get("env_id", defaults.env_id))
+    gun_motor = _as_mapping(data.get("motor"), name="motor") if env_id == "Custom-GunServo-Position-v0" else {}
+    gun_domain_randomization = (
+        _as_mapping(data.get("domain_randomization"), name="domain_randomization")
+        if env_id == "Custom-GunServo-Position-v0"
+        else {}
+    )
     return EnvConfig(
-        env_id=str(data.get("env_id", defaults.env_id)),
+        env_id=env_id,
         seed=int(data.get("seed", defaults.seed)),
         gem_kwargs=gem_kwargs,
         use_custom_env=bool(data.get("use_custom_env", defaults.use_custom_env)),
@@ -854,6 +887,14 @@ def parse_env_config(path: str | Path) -> EnvConfig:
             reward_cfg=reward_cfg,
         ),
         domain_randomization=_parse_env_domain_randomization_config(data),
+        gun_motor=gun_motor,
+        gun_load=_as_mapping(data.get("load"), name="load"),
+        gun_reference=_as_mapping(data.get("reference"), name="reference"),
+        gun_rl_action=_as_mapping(data.get("rl_action"), name="rl_action"),
+        gun_reward=_as_mapping(data.get("reward"), name="reward"),
+        gun_domain_randomization=gun_domain_randomization,
+        gun_environment=_as_mapping(data.get("environment"), name="environment"),
+        gun_speed_controller=_as_mapping(data.get("speed_controller"), name="speed_controller"),
     )
 
 

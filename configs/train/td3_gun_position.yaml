@@ -1,0 +1,32 @@
+algo: td3
+run_name: td3_gun_position
+output_dir: outputs
+device: cpu
+seed: 0
+
+total_steps: 1000000
+replay_capacity: 300000
+batch_size: 256
+warmup_steps: 10000
+update_after: 5000
+
+gamma: 0.99
+tau: 0.005
+lr_actor: 0.0001
+lr_critic: 0.001
+hidden_dim: 256
+
+exploration_noise: 0.10
+target_policy_noise: 0.20
+target_noise_clip: 0.50
+policy_delay: 2
+
+eval_every_steps: 25000
+eval_episodes: 5
+eval_config: configs/eval/gun_servo_default.yaml
+eval_scenario: small_angle_step_tracking
+eval_metric: rmse_theta
+best_checkpoint_metric: rmse_theta
+save_every_steps: 25000
+log_every_steps: 5000
+

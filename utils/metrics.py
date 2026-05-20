@@ -41,6 +41,18 @@ CONTROL_COLUMN_ALIASES = {
     "active_Umax": ("active_Umax", "Umax", "u_max"),
     "action_saturated": ("action_saturated",),
 }
+GUN_SERVO_COLUMN_ALIASES = {
+    "theta_ref_deg": ("theta_ref_deg", "theta_ref"),
+    "theta_L_deg": ("theta_L_deg", "theta_L"),
+    "e_theta_deg": ("e_theta_deg",),
+    "omega_ref_deg_s": ("omega_ref_deg_s", "omega_ref", "omega_ff"),
+    "omega_L_deg_s": ("omega_L_deg_s", "omega_L"),
+    "omega_cmd_deg_s": ("omega_cmd_deg_s", "omega_cmd"),
+    "iq_A": ("iq_A", "iq"),
+    "disturbance_torque_Nm": ("disturbance_torque_Nm", "disturbance_torque"),
+    "speed_saturation_flag": ("speed_saturation_flag", "saturation_flag"),
+    "current_saturation_flag": ("current_saturation_flag",),
+}
 
 
 
@@ -195,6 +207,97 @@ def _compute_saturation_count(
     return int(np.sum(voltage_norm >= (0.98 * active_limit)))
 
 
+def _disturbance_recovery_time(
+    *,
+    axis: np.ndarray,
+    theta_error: np.ndarray,
+    disturbance: np.ndarray,
+) -> float:
+    if disturbance.size != theta_error.size or axis.size != theta_error.size or disturbance.size < 2:
+        return float("nan")
+    threshold = max(1e-9, 0.05 * max(1.0, float(np.nanmax(np.abs(disturbance)))))
+    changes = np.flatnonzero(np.abs(np.diff(disturbance)) > threshold)
+    if changes.size == 0:
+        active = np.flatnonzero(np.abs(disturbance) > threshold)
+        if active.size == 0:
+            return float("nan")
+        start = int(active[0])
+    else:
+        start = int(changes[0] + 1)
+    band = max(0.1, 0.02 * max(1.0, float(np.nanmax(np.abs(theta_error)))))
+    within = np.abs(theta_error[start:]) <= band
+    if not bool(np.any(within)):
+        return float("nan")
+    idx = int(np.flatnonzero(within)[0] + start)
+    return float(axis[idx] - axis[start])
+
+
+def _summarize_gun_servo_csv(
+    *,
+    rows: Sequence[dict[str, str]],
+    fieldnames: Iterable[str],
+    axis: np.ndarray,
+    dt: float,
+) -> dict[str, float | int]:
+    theta_ref, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["theta_ref_deg"])
+    theta_l, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["theta_L_deg"])
+    e_theta_series, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["e_theta_deg"])
+    if theta_ref is None or theta_l is None:
+        if e_theta_series is None:
+            return {}
+        theta_error = e_theta_series
+        theta_ref = np.zeros_like(theta_error)
+        theta_l = -theta_error
+    else:
+        theta_error = theta_ref - theta_l
+
+    omega_ref, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["omega_ref_deg_s"])
+    omega_l, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["omega_L_deg_s"])
+    if omega_ref is not None and omega_l is not None:
+        omega_error = omega_ref - omega_l
+        rmse_omega = float(math.sqrt(float(np.mean(omega_error**2))))
+    else:
+        rmse_omega = float("nan")
+
+    iq, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["iq_A"])
+    disturbance, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["disturbance_torque_Nm"])
+    speed_sat, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["speed_saturation_flag"])
+    current_sat, _ = _read_series(rows, fieldnames, GUN_SERVO_COLUMN_ALIASES["current_saturation_flag"])
+    saturation_flag, _ = _read_series(rows, fieldnames, ("saturation_flag",))
+
+    overshoot, settling_time = _compute_step_response_metrics(
+        axis=axis,
+        response=theta_l,
+        reference=theta_ref,
+    )
+    if disturbance is None:
+        disturbance = np.zeros_like(theta_error)
+    if speed_sat is None:
+        speed_sat = saturation_flag if saturation_flag is not None else np.zeros_like(theta_error)
+    if current_sat is None:
+        current_sat = np.zeros_like(theta_error)
+    if iq is None:
+        iq = np.full_like(theta_error, fill_value=np.nan)
+
+    return {
+        "rmse_theta": float(math.sqrt(float(np.mean(theta_error**2)))),
+        "mae_theta": float(np.mean(np.abs(theta_error))),
+        "max_abs_theta_error": float(np.max(np.abs(theta_error))),
+        "overshoot": float(overshoot),
+        "settling_time": float(settling_time),
+        "rmse_omega": rmse_omega,
+        "max_iq": float(np.nanmax(np.abs(iq))) if np.any(np.isfinite(iq)) else float("nan"),
+        "control_energy": float(np.nansum(iq**2) * dt),
+        "speed_saturation_count": int(np.sum(speed_sat > 0.5)),
+        "current_saturation_count": int(np.sum(current_sat > 0.5)),
+        "disturbance_recovery_time": _disturbance_recovery_time(
+            axis=axis,
+            theta_error=theta_error,
+            disturbance=disturbance,
+        ),
+    }
+
+
 
 def summarize_eval_csv(path: str | Path) -> dict[str, float | int | str]:
     rows = load_rows(path)
@@ -202,7 +305,8 @@ def summarize_eval_csv(path: str | Path) -> dict[str, float | int | str]:
         raise ValueError(f"No data rows found in {path}")
 
     fieldnames = list(rows[0].keys())
-    pairs = infer_tracking_pairs(fieldnames)
+    layout_value = rows[0].get("layout", "unknown")
+    pairs = [] if str(layout_value) == "gun_servo_position" else infer_tracking_pairs(fieldnames)
     terminated = int(float(rows[-1].get("terminated", 0.0) or 0.0))
     truncated = int(float(rows[-1].get("truncated", 0.0) or 0.0))
     done = int(float(rows[-1].get("done", float(bool(terminated or truncated))) or 0.0))
@@ -213,7 +317,7 @@ def summarize_eval_csv(path: str | Path) -> dict[str, float | int | str]:
         "path": str(path),
         "controller": rows[0].get("controller", "unknown"),
         "env_id": rows[0].get("env_id", "unknown"),
-        "layout": rows[0].get("layout", "unknown"),
+        "layout": layout_value,
         "scenario": rows[-1].get("scenario") or rows[0].get("scenario") or "default",
         "steps": len(rows),
         "episode_length": len(rows),
@@ -224,6 +328,17 @@ def summarize_eval_csv(path: str | Path) -> dict[str, float | int | str]:
         "done_reason": rows[-1].get("done_reason") or rows[-1].get("termination_reason") or "",
         "num_tracking_pairs": len(pairs),
     }
+    if str(summary["layout"]) == "gun_servo_position" or _first_existing(fieldnames, ("theta_ref_deg", "theta_L_deg")):
+        summary.update(
+            _summarize_gun_servo_csv(
+                rows=rows,
+                fieldnames=fieldnames,
+                axis=axis,
+                dt=dt,
+            )
+        )
+        summary.setdefault("saturation_count", int(summary.get("speed_saturation_count", 0)))
+        return summary
     if not pairs:
         summary["control_energy"] = float("nan")
         summary["action_delta_energy"] = float("nan")

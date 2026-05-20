@@ -1,0 +1,167 @@
+"""Reference trajectories for gun-servo position outer-loop experiments.
+
+These trajectories support the project shift from PMSM current-loop benchmarks
+to gun/fire-control servo position tracking simulations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+
+@dataclass(slots=True)
+class TrajectoryPoint:
+    """Reference position, velocity feedforward, and acceleration feedforward."""
+
+    theta_ref: float
+    omega_ff: float
+    alpha_ff: float
+
+
+def _as_range(values: tuple[float, float] | list[float] | None, default: tuple[float, float]) -> tuple[float, float]:
+    if values is None:
+        return default
+    lo, hi = float(values[0]), float(values[1])
+    return (lo, hi) if lo <= hi else (hi, lo)
+
+
+class GunServoTrajectoryGenerator:
+    """Small trajectory generator for single-axis gun servo tracking.
+
+    All public outputs are in radians, radians per second, and radians per
+    second squared.  Config files may still use degree-based values for human
+    readability; conversion happens before construction.
+    """
+
+    VALID_PROFILES = {"step", "trapezoid", "sinusoidal", "random_step"}
+
+    def __init__(
+        self,
+        *,
+        profile: str = "step",
+        theta_range: tuple[float, float] = (-0.35, 0.35),
+        max_speed: float = 0.7,
+        max_accel: float = 2.0,
+        step_time: float = 0.2,
+        sine_frequency_hz: float = 0.25,
+        randomize_on_reset: bool = False,
+    ) -> None:
+        self.profile = str(profile).strip().lower()
+        if self.profile not in self.VALID_PROFILES:
+            raise ValueError(f"Unsupported gun-servo trajectory profile: {profile}")
+        self.theta_range = _as_range(theta_range, (-0.35, 0.35))
+        self.max_speed = max(float(max_speed), 1e-6)
+        self.max_accel = max(float(max_accel), 1e-6)
+        self.step_time = max(float(step_time), 0.0)
+        self.sine_frequency_hz = max(float(sine_frequency_hz), 1e-6)
+        self.randomize_on_reset = bool(randomize_on_reset)
+        self.theta_initial = 0.0
+        self.theta_final = float(self.theta_range[1])
+        self._rng = np.random.default_rng(0)
+
+    def reset(self, *, rng: np.random.Generator | None = None) -> None:
+        """Sample any episode-specific reference settings."""
+        if rng is not None:
+            self._rng = rng
+        lo, hi = self.theta_range
+        if self.randomize_on_reset or self.profile == "random_step":
+            self.theta_initial = float(self._rng.uniform(lo, hi))
+            self.theta_final = float(self._rng.uniform(lo, hi))
+            if abs(self.theta_final - self.theta_initial) < np.deg2rad(1.0):
+                self.theta_final = float(hi if self.theta_initial < (lo + hi) * 0.5 else lo)
+        else:
+            self.theta_initial = 0.0 if lo <= 0.0 <= hi else float(lo)
+            self.theta_final = float(hi)
+
+    def _step(self, t: float) -> TrajectoryPoint:
+        theta = self.theta_initial if float(t) < self.step_time else self.theta_final
+        return TrajectoryPoint(theta_ref=float(theta), omega_ff=0.0, alpha_ff=0.0)
+
+    def _sinusoidal(self, t: float) -> TrajectoryPoint:
+        lo, hi = self.theta_range
+        bias = 0.5 * (lo + hi)
+        amp = 0.5 * (hi - lo)
+        omega = 2.0 * np.pi * self.sine_frequency_hz
+        theta = bias + amp * np.sin(omega * float(t))
+        omega_ff = amp * omega * np.cos(omega * float(t))
+        alpha_ff = -amp * omega**2 * np.sin(omega * float(t))
+        return TrajectoryPoint(float(theta), float(omega_ff), float(alpha_ff))
+
+    def _trapezoid(self, t: float) -> TrajectoryPoint:
+        start = self.theta_initial
+        target = self.theta_final
+        distance = float(target - start)
+        sign = 1.0 if distance >= 0.0 else -1.0
+        distance_abs = abs(distance)
+        if distance_abs <= 1e-12:
+            return TrajectoryPoint(float(target), 0.0, 0.0)
+
+        t = max(float(t) - self.step_time, 0.0)
+        a = self.max_accel
+        v = self.max_speed
+        t_accel = v / a
+        d_accel = 0.5 * a * t_accel**2
+        if 2.0 * d_accel >= distance_abs:
+            t_accel = np.sqrt(distance_abs / a)
+            t_flat = 0.0
+            v_peak = a * t_accel
+        else:
+            t_flat = (distance_abs - 2.0 * d_accel) / v
+            v_peak = v
+        t_total = 2.0 * t_accel + t_flat
+
+        if t <= 0.0:
+            pos = 0.0
+            vel = 0.0
+            acc = 0.0
+        elif t < t_accel:
+            pos = 0.5 * a * t**2
+            vel = a * t
+            acc = a
+        elif t < t_accel + t_flat:
+            tau = t - t_accel
+            pos = 0.5 * a * t_accel**2 + v_peak * tau
+            vel = v_peak
+            acc = 0.0
+        elif t < t_total:
+            tau = t - t_accel - t_flat
+            pos = 0.5 * a * t_accel**2 + v_peak * t_flat + v_peak * tau - 0.5 * a * tau**2
+            vel = v_peak - a * tau
+            acc = -a
+        else:
+            pos = distance_abs
+            vel = 0.0
+            acc = 0.0
+
+        return TrajectoryPoint(
+            theta_ref=float(start + sign * pos),
+            omega_ff=float(sign * vel),
+            alpha_ff=float(sign * acc),
+        )
+
+    def sample(self, t: float) -> TrajectoryPoint:
+        """Return the trajectory point at time ``t``."""
+        if self.profile in {"step", "random_step"}:
+            return self._step(t)
+        if self.profile == "trapezoid":
+            return self._trapezoid(t)
+        if self.profile == "sinusoidal":
+            return self._sinusoidal(t)
+        raise ValueError(f"Unsupported profile: {self.profile}")
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "GunServoTrajectoryGenerator":
+        """Build from an env config dictionary using degree-based values."""
+        theta_deg = _as_range(config.get("theta_range_deg"), (-10.0, 10.0))
+        return cls(
+            profile=str(config.get("profile", "step")),
+            theta_range=(float(np.deg2rad(theta_deg[0])), float(np.deg2rad(theta_deg[1]))),
+            max_speed=float(np.deg2rad(float(config.get("max_speed_deg_s", 40.0)))),
+            max_accel=float(np.deg2rad(float(config.get("max_accel_deg_s2", 120.0)))),
+            step_time=float(config.get("step_time_s", 0.2)),
+            sine_frequency_hz=float(config.get("sine_frequency_hz", 0.25)),
+            randomize_on_reset=bool(config.get("randomize_on_reset", False)),
+        )
