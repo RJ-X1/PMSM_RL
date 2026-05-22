@@ -43,7 +43,7 @@ test_scenarios:
     domain_randomization:
       enabled: false
 
-  - id: sine_10deg_0p5hz
+  - id: sine_tracking
     name: Sine 10 deg 0.5 Hz
     reference:
       profile: sinusoidal
@@ -57,7 +57,7 @@ test_scenarios:
     domain_randomization:
       enabled: false
 
-  - id: disturbance_150nm
+  - id: disturbance_step
     name: 150 Nm load disturbance rejection
     reference:
       profile: step
@@ -72,8 +72,8 @@ test_scenarios:
     domain_randomization:
       enabled: false
 
-  - id: randomized_eval
-    name: Randomized parameter mismatch
+  - id: param_random_mc
+    name: Monte Carlo parameter mismatch
     reference:
       profile: random_step
       theta_range_deg: [-20.0, 20.0]
@@ -90,3 +90,5 @@ test_scenarios:
       gravity_torque_scale_range: [0.85, 1.2]
       disturbance_torque_range: [-80.0, 80.0]
       encoder_noise_rad_range: [0.0, 2.0e-5]
+      gear_efficiency_range: [0.60, 0.80]
+      vdc_scale_range: [0.85, 1.10]

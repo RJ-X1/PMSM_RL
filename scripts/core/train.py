@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import sys
 
@@ -41,6 +42,7 @@ from utils.experiment_factory import (
 )
 from utils.residual_control import (
     compose_residual_action,
+    gun_servo_controller_overrides,
     is_residual_controller,
     normalize_controller_name,
     residual_agent_action_bounds,
@@ -58,6 +60,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-config", type=Path, default=None, help="Optional eval-config override")
     parser.add_argument("--pi-config", type=Path, default=DEFAULT_PI_CONFIG_PATH)
     parser.add_argument("--eval-scenario", default=None, help="Optional periodic-eval scenario override")
+    parser.add_argument(
+        "--controller",
+        choices=("rl", "td3_pi", "sc_td3_pi", "mc_sc_td3_pi", "residual", "pi_rl_residual"),
+        default=None,
+        help="Public controller label for gun-servo RL-PI experiments.",
+    )
+    parser.add_argument("--run-name", default=None, help="Optional run-name override")
     parser.add_argument("--controller-mode", choices=("rl", "residual", "pi_rl_residual"), default=None)
     parser.add_argument("--residual-scale", type=float, default=None)
     parser.add_argument("--residual-action-clip", type=float, default=None)
@@ -166,12 +175,32 @@ def _set_agent_exploration_noise(agent: Any, value: float) -> None:
         hparams.policy_noise_std = float(value)
 
 
-def _resolve_controller_mode(train_cfg: Any, *, override: str | None) -> str:
+def _resolve_controller_mode(train_cfg: Any, *, override: str | None, controller: str | None = None) -> str:
     configured = override if override not in (None, "") else getattr(train_cfg, "controller_mode", None)
+    if configured in (None, "") and controller not in (None, ""):
+        configured = controller
     mode = normalize_controller_name(configured if configured not in (None, "") else "rl")
+    if mode in {"td3_pi", "sc_td3_pi", "mc_sc_td3_pi"}:
+        return "rl"
     if mode not in {"rl", "residual"}:
         raise ValueError(f"Unsupported training controller_mode: {configured}")
     return mode
+
+
+def _apply_gun_servo_controller_overrides(env_cfg: Any, controller: str | None) -> tuple[Any, bool | None]:
+    overrides = gun_servo_controller_overrides(controller or "rl")
+    if not overrides:
+        return env_cfg, None
+    safety = {**dict(getattr(env_cfg, "gun_safety", {}) or {}), **dict(overrides.get("safety", {}) or {})}
+    domain_randomization = {
+        **dict(getattr(env_cfg, "gun_domain_randomization", {}) or {}),
+        **dict(overrides.get("domain_randomization", {}) or {}),
+    }
+    apply_dr = overrides.get("apply_domain_randomization")
+    return (
+        replace(env_cfg, gun_safety=safety, gun_domain_randomization=domain_randomization),
+        None if apply_dr is None else bool(apply_dr),
+    )
 
 
 def _make_pi_controller(
@@ -472,8 +501,11 @@ def main() -> None:
 
     env_cfg = parse_env_config(args.env_config)
     train_cfg = parse_train_config(args.train_config)
+    if args.run_name not in (None, ""):
+        train_cfg.run_name = str(args.run_name)
     pi_cfg = parse_pi_config(args.pi_config)
-    controller_mode = _resolve_controller_mode(train_cfg, override=args.controller_mode)
+    public_controller = normalize_controller_name(args.controller or getattr(train_cfg, "controller_mode", None) or "rl")
+    controller_mode = _resolve_controller_mode(train_cfg, override=args.controller_mode, controller=args.controller)
     residual_settings = resolve_residual_settings(
         train_cfg,
         residual_scale_override=args.residual_scale,
@@ -485,14 +517,16 @@ def main() -> None:
     env_cfg = apply_train_reward_override(env_cfg, train_cfg)
     env_cfg = apply_train_action_smoothness_override(env_cfg, train_cfg)
     env_cfg = apply_train_domain_randomization_override(env_cfg, train_cfg)
+    env_cfg, controller_apply_dr = _apply_gun_servo_controller_overrides(env_cfg, public_controller)
     effective_eval_config_path = _resolve_eval_config_path(train_cfg, override=args.eval_config)
     eval_scenario = _resolve_eval_scenario(train_cfg, override=args.eval_scenario)
     eval_env_cfg = _maybe_apply_eval_scenario(env_cfg, effective_eval_config_path, eval_scenario)
+    eval_env_cfg, _ = _apply_gun_servo_controller_overrides(eval_env_cfg, public_controller)
     best_checkpoint_metric = _resolve_best_checkpoint_metric(train_cfg)
     set_seed(int(env_cfg.seed))
 
     env = make_train_env(
-        make_env_build_config(env_cfg, apply_domain_randomization=None)
+        make_env_build_config(env_cfg, apply_domain_randomization=controller_apply_dr)
     )
     base_env = getattr(env, "unwrapped", env)
     obs_dim = int(env.observation_space.shape[0])
@@ -572,6 +606,7 @@ def main() -> None:
     reward_mode = str(getattr(getattr(env_cfg, "reward", None), "mode", ""))
     print(
         "components "
+        f"controller={public_controller} "
         f"controller_mode={controller_mode} "
         f"residual_scale={float(residual_settings.residual_scale):.4f} "
         f"residual_action_clip={residual_settings.residual_action_clip} "

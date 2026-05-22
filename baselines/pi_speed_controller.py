@@ -27,7 +27,7 @@ class PISpeedController:
     def reset(self) -> None:
         self.integrator = 0.0
 
-    def compute_iq_command(self, *, omega_cmd: float, omega_meas: float, dt: float) -> tuple[float, bool]:
+    def compute_iq_command_raw(self, *, omega_cmd: float, omega_meas: float, dt: float) -> tuple[float, float, bool]:
         error = float(omega_cmd) - float(omega_meas)
         self.integrator += float(self.config.ki) * error * float(dt)
         self.integrator = float(
@@ -35,4 +35,12 @@ class PISpeedController:
         )
         raw_iq = float(self.config.kp) * error + self.integrator
         iq_cmd = float(np.clip(raw_iq, -float(self.config.iq_limit), float(self.config.iq_limit)))
-        return iq_cmd, bool(abs(raw_iq - iq_cmd) > 1e-9)
+        return raw_iq, iq_cmd, bool(abs(raw_iq - iq_cmd) > 1e-9)
+
+    def compute_iq_command(self, *, omega_cmd: float, omega_meas: float, dt: float) -> tuple[float, bool]:
+        _raw_iq, iq_cmd, saturated = self.compute_iq_command_raw(
+            omega_cmd=omega_cmd,
+            omega_meas=omega_meas,
+            dt=dt,
+        )
+        return iq_cmd, saturated
