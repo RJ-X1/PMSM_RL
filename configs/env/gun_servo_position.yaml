@@ -9,6 +9,9 @@ gun_servo_env:
   dt: 1.0e-3
   integration_dt: 1.0e-4
   episode_steps: 3000
+  obs_dim: 10
+  act_dim: 1
+  action_type: load_speed_delta
 
 motor:
   model: ISMG1-95C15CD-A331FA
@@ -29,7 +32,9 @@ motor:
 servo_drive:
   model: IS650PT025IUX-B
   mode: speed
+  max_output_current_a: 46.75
   current_limit_a: 43.2
+  vdc_nominal_v: 540.0
   speed_loop_gain_hz: 25.0
   speed_loop_integral_time_ms: 31.83
   torque_filter_time_ms: 0.79
@@ -46,6 +51,7 @@ gearbox:
 
 load:
   theta_range_deg: [-30.0, 30.0]
+  theta_limit_deg: 30.0
   omega_limit_deg_s: 30.0
   alpha_limit_deg_s2: 150.0
   inertia_kg_m2: 300.0
@@ -98,15 +104,36 @@ rl_controller:
 
 reward:
   mode: quadratic_tracking
-  w_theta: 8.0
-  w_omega: 0.15
-  w_iq: 0.01
-  w_action_smoothness: 0.02
-  w_saturation: 0.25
-  w_terminal: 2.0
+  w_theta: 1.0
+  w_omega: 0.1
+  w_action: 0.02
+  w_torque: 0.02
+  w_safety: 10.0
+
+safety:
+  enable_u_safe: true
+  enable_e_safe: true
+  enable_x_safe: true
+  lambda_smooth: 0.8
+  safety_penalty: 10.0
+
+normalization:
+  theta_scale_deg: 30.0
+  omega_scale_deg_s: 30.0
+  torque_scale_nm: 1800.0
+  current_scale_a: 43.2
+  vdc_nominal_v: 540.0
 
 domain_randomization:
-  enabled: true
+  enabled: false
+  inertia_range: [100.0, 800.0]
+  damping_range: [10.0, 100.0]
+  coulomb_friction_range: [20.0, 150.0]
+  gravity_torque_range: [0.0, 800.0]
+  gear_efficiency_range: [0.60, 0.80]
+  disturbance_range: [50.0, 500.0]
+  vdc_scale_range: [0.85, 1.10]
+  encoder_noise_std_range: [0.0, 3.0e-5]
   J_load_scale_range: [0.8, 1.2]
   B_load_scale_range: [0.7, 1.3]
   friction_scale_range: [0.7, 1.4]

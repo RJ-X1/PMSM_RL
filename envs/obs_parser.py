@@ -40,11 +40,11 @@ GUN_SERVO_OBSERVATION_NAMES = (
     "theta_ref",
     "theta_L",
     "omega_L",
-    "prev_action",
+    "T_hat_L",
     "iq",
-    "T_L_hat",
-    "omega_cmd",
-    "saturation_flag",
+    "V_dc",
+    "a_safe_prev",
+    "m_k",
 )
 GUN_SERVO_ACTION_NAMES = ("act_delta_omega",)
 
@@ -263,7 +263,7 @@ def _gun_servo_observation_spec(env_id: str) -> ObservationSpec:
         layout="gun_servo_position",
         state_names=["e_theta", "e_omega", "theta_ref", "theta_L", "omega_L"],
         reference_names=[],
-        extra_names=["prev_action", "iq", "T_L_hat", "omega_cmd", "saturation_flag"],
+        extra_names=["T_hat_L", "iq", "V_dc", "a_safe_prev", "m_k"],
         action_names=list(GUN_SERVO_ACTION_NAMES),
     )
 

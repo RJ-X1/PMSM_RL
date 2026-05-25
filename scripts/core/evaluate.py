@@ -42,7 +42,10 @@ from utils.experiment_factory import (
 )
 from utils.residual_control import (
     compose_residual_action,
+    gun_servo_controller_overrides,
+    is_pid_pi_controller,
     is_residual_controller,
+    is_rl_actor_controller,
     normalize_controller_name,
     resolve_residual_settings,
 )
@@ -70,7 +73,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="best",
         help="Preferred RL checkpoint alias when --checkpoint is not provided.",
     )
-    parser.add_argument("--controller", choices=("rl", "pi", "pid", "residual", "pi_rl_residual"), default="rl")
+    parser.add_argument(
+        "--controller",
+        choices=(
+            "rl",
+            "pi",
+            "pid",
+            "pid_pi_foc",
+            "td3_pi",
+            "sc_td3_pi",
+            "mc_sc_td3_pi",
+            "smc_pi_foc",
+            "residual",
+            "pi_rl_residual",
+        ),
+        default="rl",
+    )
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None, help="Optional evaluation seed override")
     parser.add_argument("--output-csv", type=Path, default=None)
@@ -124,6 +142,52 @@ def _default_checkpoint_path(train_cfg: Any, *, tag: str = "best") -> Path:
         if best_path.exists():
             return best_path
     return layout.checkpoints_dir / "checkpoint_latest.pt"
+
+
+def _apply_checkpoint_hparams(train_cfg: Any, checkpoint_path: Path | None) -> None:
+    if checkpoint_path is None or not Path(checkpoint_path).exists():
+        return
+    try:
+        import torch
+
+        payload = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        return
+    hparams = payload.get("hparams") if isinstance(payload, dict) else None
+    if not isinstance(hparams, dict):
+        return
+    for name in (
+        "hidden_dim",
+        "gamma",
+        "tau",
+        "lr_actor",
+        "lr_critic",
+        "target_policy_noise",
+        "target_noise_clip",
+        "policy_delay",
+    ):
+        source_name = {
+            "lr_actor": "actor_lr",
+            "lr_critic": "critic_lr",
+        }.get(name, name)
+        if source_name in hparams and hasattr(train_cfg, name):
+            setattr(train_cfg, name, hparams[source_name])
+
+
+def _apply_controller_env_overrides(env_cfg: Any, controller_name: str) -> tuple[Any, bool | None]:
+    overrides = gun_servo_controller_overrides(controller_name)
+    if not overrides:
+        return env_cfg, None
+    safety = {**dict(getattr(env_cfg, "gun_safety", {}) or {}), **dict(overrides.get("safety", {}) or {})}
+    domain_randomization = {
+        **dict(getattr(env_cfg, "gun_domain_randomization", {}) or {}),
+        **dict(overrides.get("domain_randomization", {}) or {}),
+    }
+    apply_dr = overrides.get("apply_domain_randomization")
+    return (
+        replace(env_cfg, gun_safety=safety, gun_domain_randomization=domain_randomization),
+        None if apply_dr is None else bool(apply_dr),
+    )
 
 
 def _make_pi_controller(
@@ -354,9 +418,13 @@ def _apply_gun_servo_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> A
         gun_reference=reference,
         gun_load=load,
         gun_load_encoder=merged_dict("gun_load_encoder", "load_encoder"),
+        gun_rl_action=merged_dict("gun_rl_action", "rl_action"),
         gun_rl_controller=merged_dict("gun_rl_controller", "rl_controller"),
+        gun_safety=merged_dict("gun_safety", "safety"),
+        gun_normalization=merged_dict("gun_normalization", "normalization"),
         gun_domain_randomization=domain_randomization,
         gun_environment=merged_dict("gun_environment", "environment"),
+        gun_speed_controller=merged_dict("gun_speed_controller", "speed_controller"),
     )
 
 
@@ -400,6 +468,8 @@ def run_evaluation(
     effective_eval_config_path = Path(eval_config_path or DEFAULT_EVAL_CONFIG_PATH)
     eval_cfg = parse_eval_config(effective_eval_config_path)
     controller_name = normalize_controller_name(controller_name)
+    if controller_name == "smc_pi_foc":
+        raise NotImplementedError("smc_pi_foc is reserved for the second-round robust-control baseline.")
     residual_settings = resolve_residual_settings(
         train_cfg,
         eval_cfg,
@@ -414,11 +484,12 @@ def run_evaluation(
         effective_eval_config_path,
         scenario_name,
     )
+    env_cfg, controller_apply_dr = _apply_controller_env_overrides(env_cfg, controller_name)
     pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
 
-    env = make_eval_env(make_env_build_config(env_cfg, seed_override=eval_seed))
+    env = make_eval_env(make_env_build_config(env_cfg, seed_override=eval_seed, apply_domain_randomization=controller_apply_dr))
     obs_dim = int(env.observation_space.shape[0])
     act_dim = int(env.action_space.shape[0])
     action_low = float(env.action_space.low.min())
@@ -450,7 +521,10 @@ def run_evaluation(
         raise KeyError(f"Evaluation export is missing required trace columns: {missing_trace_columns}")
 
     residual_mode = is_residual_controller(controller_name)
-    if controller_name == "rl" or residual_mode:
+    actor_mode = is_rl_actor_controller(controller_name)
+    if actor_mode or residual_mode:
+        resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg, tag=checkpoint_tag)
+        _apply_checkpoint_hparams(train_cfg, resolved_checkpoint)
         agent = build_rl_agent(
             obs_dim=obs_dim,
             act_dim=act_dim,
@@ -458,7 +532,6 @@ def run_evaluation(
             action_low=action_low,
             action_high=action_high,
         )
-        resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg, tag=checkpoint_tag)
         agent.load_checkpoint(resolved_checkpoint)
 
         if residual_mode:
@@ -481,7 +554,7 @@ def run_evaluation(
             def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None]:
                 return agent.select_action(policy_obs, add_noise=False), None
 
-    elif controller_name in {"pi", "pid"}:
+    elif is_pid_pi_controller(controller_name):
         resolved_checkpoint = checkpoint_path
         if spec.layout == "gun_servo_position":
             cascade = _make_cascade_servo_controller(spec=spec, env=env)
@@ -507,11 +580,16 @@ def run_evaluation(
     final_done_reason = ""
 
     fieldnames = [
+        "run_id",
+        "algorithm",
+        "seed",
+        "episode",
         "controller",
         "env_id",
         "layout",
         "scenario",
         "step",
+        "t_s",
         "reward",
         "cum_reward",
         "terminated",
@@ -537,20 +615,47 @@ def run_evaluation(
     ]
     if spec.layout == "gun_servo_position":
         fieldnames += [
+            "theta_ref_rad",
             "theta_ref_deg",
+            "theta_L_rad",
             "theta_L_deg",
+            "omega_L_rad_s",
+            "omega_m_rad_s",
+            "omega_m_ref_rad_s",
+            "e_theta_rad",
             "e_theta_deg",
+            "e_omega_load",
             "omega_ref_deg_s",
             "omega_L_deg_s",
             "omega_cmd_deg_s",
+            "a_raw",
+            "a_clip",
+            "a_safe",
+            "delta_a_safe",
+            "omega_L_cmd_raw",
+            "omega_L_cmd_safe",
+            "omega_m_cmd",
             "iq_A",
+            "i_q",
+            "i_q_ref_raw",
+            "i_q_ref",
             "Te_Nm",
+            "T_e",
             "T_out_Nm",
+            "T_out_max_Nm",
+            "T_out_raw",
+            "T_L",
+            "T_hat_L",
             "TL_Nm",
+            "V_dc",
             "theta_meas_deg",
             "action_raw",
             "action_safe",
             "disturbance_torque_Nm",
+            "sigma_safe",
+            "flag_U_safe",
+            "flag_E_safe",
+            "flag_X_safe",
             "saturation_flag",
             "speed_saturation_flag",
             "current_saturation_flag",
@@ -586,6 +691,10 @@ def run_evaluation(
             parsed_obs = parse_flat_observation(obs, spec=spec)
 
             row = {
+                "run_id": train_cfg.run_name,
+                "algorithm": controller_name,
+                "seed": eval_seed,
+                "episode": 0,
                 "controller": controller_name,
                 "env_id": env_cfg.env_id,
                 "layout": spec.layout,
@@ -606,6 +715,7 @@ def run_evaluation(
                 _add_residual_row_fields(row, residual_trace, settings=residual_settings)
             if sim_dt is not None:
                 row["time_s"] = float(step) * sim_dt
+                row["t_s"] = float(step) * sim_dt
             row.update(parsed_obs)
             row.update({name: float(value) for name, value in zip(spec.action_names, action)})
             if spec.layout == "custom_dq":
@@ -652,8 +762,11 @@ def run_evaluation(
                         row["omega_cmd_deg_s"] = float(parsed_obs["omega_cmd"]) * omega_scale * (180.0 / np.pi)
                 if current_scale is not None and "iq" in parsed_obs:
                     row["iq_A"] = float(parsed_obs["iq"]) * current_scale
-                if torque_scale is not None and "T_L_hat" in parsed_obs:
-                    row["TL_Nm"] = float(parsed_obs["T_L_hat"]) * torque_scale
+                if torque_scale is not None:
+                    if "T_hat_L" in parsed_obs:
+                        row["TL_Nm"] = float(parsed_obs["T_hat_L"]) * torque_scale
+                    elif "T_L_hat" in parsed_obs:
+                        row["TL_Nm"] = float(parsed_obs["T_L_hat"]) * torque_scale
                 if "saturation_flag" in parsed_obs:
                     row["saturation_flag"] = int(float(parsed_obs["saturation_flag"]) > 0.5)
             if isinstance(_info, dict):
@@ -681,16 +794,39 @@ def run_evaluation(
                     )
                 if spec.layout == "gun_servo_position":
                     for key in (
+                        "theta_ref_rad",
                         "theta_ref_deg",
+                        "theta_L_rad",
                         "theta_L_deg",
+                        "omega_L_rad_s",
+                        "omega_m_rad_s",
+                        "omega_m_ref_rad_s",
+                        "e_theta_rad",
                         "e_theta_deg",
+                        "e_omega_load",
                         "omega_ref_deg_s",
                         "omega_L_deg_s",
                         "omega_cmd_deg_s",
+                        "a_raw",
+                        "a_clip",
+                        "a_safe",
+                        "delta_a_safe",
+                        "omega_L_cmd_raw",
+                        "omega_L_cmd_safe",
+                        "omega_m_cmd",
                         "iq_A",
+                        "i_q",
+                        "i_q_ref_raw",
+                        "i_q_ref",
                         "Te_Nm",
+                        "T_e",
                         "T_out_Nm",
+                        "T_out_max_Nm",
+                        "T_out_raw",
+                        "T_L",
+                        "T_hat_L",
                         "TL_Nm",
+                        "V_dc",
                         "theta_meas_deg",
                         "action_raw",
                         "action_safe",
@@ -708,6 +844,10 @@ def run_evaluation(
                         "motor_torque_saturation_flag",
                         "gear_torque_saturation_flag",
                         "constraint_violation",
+                        "sigma_safe",
+                        "flag_U_safe",
+                        "flag_E_safe",
+                        "flag_X_safe",
                     ):
                         value = _safe_float(_info.get(key))
                         if value is not None:
@@ -726,7 +866,7 @@ def run_evaluation(
         "agent_name": (
             f"pi+{resolve_agent_name(train_cfg)}_residual"
             if residual_mode
-            else resolve_agent_name(train_cfg) if controller_name == "rl" else "cascade_pid" if spec.layout == "gun_servo_position" else "pi"
+            else resolve_agent_name(train_cfg) if actor_mode else "cascade_pid" if spec.layout == "gun_servo_position" else "pi"
         ),
         "env_id": env_cfg.env_id,
         "layout": spec.layout,
@@ -736,7 +876,7 @@ def run_evaluation(
         "done_reason": final_done_reason or "not_done",
         "output_csv": final_output_csv,
         "checkpoint_path": resolved_checkpoint,
-        "checkpoint_tag": str(checkpoint_tag) if controller_name == "rl" or residual_mode else None,
+        "checkpoint_tag": str(checkpoint_tag) if actor_mode or residual_mode else None,
         "seed": eval_seed,
         "terminated": int(bool(terminated)),
         "truncated": int(bool(truncated)),

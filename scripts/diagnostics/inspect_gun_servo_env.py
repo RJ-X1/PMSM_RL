@@ -35,6 +35,11 @@ REQUIRED_INFO_KEYS = (
     "disturbance_torque_Nm",
     "constraint_violation",
     "done_reason",
+    "action_type",
+    "flag_U_safe",
+    "flag_E_safe",
+    "flag_X_safe",
+    "sigma_safe",
 )
 
 
@@ -121,6 +126,7 @@ def main() -> None:
         "action_high": np.asarray(env.action_space.high, dtype=float).reshape(-1).tolist(),
         "signal_names": spec.signal_names,
         "action_names": spec.action_names,
+        "action_type": str(info.get("action_type", "")),
         "named_observation_preview": dict(named_obs),
         "reset_info_keys": sorted(info.keys()),
         "random_rollout": {

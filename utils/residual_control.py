@@ -9,6 +9,15 @@ import numpy as np
 
 
 RESIDUAL_CONTROLLER_ALIASES = {"residual", "pi_rl_residual", "pi-rl-residual"}
+RL_ACTOR_CONTROLLERS = {"rl", "td3_pi", "sc_td3_pi", "mc_sc_td3_pi"}
+PID_PI_CONTROLLERS = {"pi", "pid", "pid_pi_foc"}
+CONTROLLER_ALIASES = {
+    "td3-pi": "td3_pi",
+    "sc-td3-pi": "sc_td3_pi",
+    "mc-sc-td3-pi": "mc_sc_td3_pi",
+    "pid-pi-foc": "pid_pi_foc",
+    "smc-pi-foc": "smc_pi_foc",
+}
 
 
 @dataclass(slots=True)
@@ -23,6 +32,7 @@ class ResidualControlSettings:
 def normalize_controller_name(value: Any) -> str:
     """Normalize public controller labels while preserving existing modes."""
     name = str(value).strip().lower()
+    name = CONTROLLER_ALIASES.get(name, name)
     if name in RESIDUAL_CONTROLLER_ALIASES:
         return "residual"
     return name
@@ -31,6 +41,50 @@ def normalize_controller_name(value: Any) -> str:
 def is_residual_controller(value: Any) -> bool:
     """Return whether a controller label requests PI-RL residual control."""
     return normalize_controller_name(value) == "residual"
+
+
+def is_rl_actor_controller(value: Any) -> bool:
+    """Return whether a controller label uses a learned actor as the position loop."""
+    return normalize_controller_name(value) in RL_ACTOR_CONTROLLERS
+
+
+def is_pid_pi_controller(value: Any) -> bool:
+    """Return whether a controller label uses the classical position PID baseline."""
+    return normalize_controller_name(value) in PID_PI_CONTROLLERS
+
+
+def gun_servo_controller_overrides(value: Any) -> dict[str, Any]:
+    """Return gun-servo env overrides implied by a public controller label."""
+    name = normalize_controller_name(value)
+    if name == "td3_pi":
+        return {
+            "safety": {
+                "enable_u_safe": False,
+                "enable_e_safe": True,
+                "enable_x_safe": False,
+            },
+            "apply_domain_randomization": False,
+        }
+    if name in {"sc_td3_pi", "pid_pi_foc", "pid", "pi", "rl"}:
+        return {
+            "safety": {
+                "enable_u_safe": True,
+                "enable_e_safe": True,
+                "enable_x_safe": True,
+            },
+            "apply_domain_randomization": False,
+        }
+    if name == "mc_sc_td3_pi":
+        return {
+            "safety": {
+                "enable_u_safe": True,
+                "enable_e_safe": True,
+                "enable_x_safe": True,
+            },
+            "domain_randomization": {"enabled": True},
+            "apply_domain_randomization": True,
+        }
+    return {}
 
 
 def _first_config_value(configs: tuple[Any, ...], name: str, default: Any) -> Any:
