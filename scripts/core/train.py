@@ -13,19 +13,22 @@ if str(ROOT) not in sys.path:
 import argparse
 import csv
 import json
+import shutil
 from typing import Any
 
 import numpy as np
 
+from baselines.cascade_servo_controller import CascadeServoController
 from baselines.pi_current_controller import PICurrentController
 from agents.replay_buffer import ReplayBuffer
 from envs.make_env import make_eval_env, make_train_env
 from envs.obs_parser import build_observation_spec
-from scripts.core.evaluate import _maybe_apply_eval_scenario
+from scripts.core.evaluate import _make_cascade_servo_controller, _maybe_apply_eval_scenario
 from utils.config import (
     apply_train_action_smoothness_override,
     apply_train_domain_randomization_override,
     apply_train_reward_override,
+    load_yaml,
     parse_env_config,
     parse_pi_config,
     parse_train_config,
@@ -41,6 +44,7 @@ from utils.experiment_factory import (
     resolve_agent_name,
 )
 from utils.residual_control import (
+    apply_residual_action_scale_from_env,
     compose_residual_action,
     gun_servo_controller_overrides,
     is_residual_controller,
@@ -175,6 +179,71 @@ def _set_agent_exploration_noise(agent: Any, value: float) -> None:
         hparams.policy_noise_std = float(value)
 
 
+def _scenario_probabilities(
+    scenarios: tuple[str, ...],
+    weights_cfg: Any,
+) -> np.ndarray | None:
+    if not scenarios or not isinstance(weights_cfg, dict):
+        return None
+    weights = np.asarray([float(weights_cfg.get(name, 0.0)) for name in scenarios], dtype=np.float64)
+    if not np.any(weights > 0.0):
+        return None
+    weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
+    total = float(np.sum(weights))
+    if total <= 0.0:
+        return None
+    return weights / total
+
+
+def _episode_metadata(base_env: Any, scenario_name: str | None) -> dict[str, Any]:
+    trajectory = getattr(base_env, "trajectory", None)
+    load_spec = getattr(base_env, "active_load_spec", None)
+    gearbox_spec = getattr(base_env, "active_gearbox_spec", None)
+    load_model = getattr(base_env, "load_model", None)
+    load_params = getattr(load_model, "params", None)
+
+    def value(path_value: Any, default: Any = "") -> Any:
+        return default if path_value is None else path_value
+
+    return {
+        "train_scenario_family": scenario_name or "",
+        "sampled_theta_initial_deg": value(
+            None if trajectory is None else float(getattr(trajectory, "theta_initial", 0.0) * 180.0 / np.pi)
+        ),
+        "sampled_theta_final_deg": value(
+            None if trajectory is None else float(getattr(trajectory, "theta_final", 0.0) * 180.0 / np.pi)
+        ),
+        "sampled_step_time_s": value(None if trajectory is None else getattr(trajectory, "active_step_time", "")),
+        "sampled_max_speed_deg_s": value(
+            None if trajectory is None else float(getattr(trajectory, "active_max_speed", 0.0) * 180.0 / np.pi)
+        ),
+        "sampled_max_accel_deg_s2": value(
+            None if trajectory is None else float(getattr(trajectory, "active_max_accel", 0.0) * 180.0 / np.pi)
+        ),
+        "sampled_sine_amplitude_deg": value(
+            None if trajectory is None else float(getattr(trajectory, "active_sine_amplitude", 0.0) * 180.0 / np.pi)
+        ),
+        "sampled_sine_frequency_hz": value(
+            None if trajectory is None else getattr(trajectory, "active_sine_frequency_hz", "")
+        ),
+        "sampled_sine_phase_rad": value(None if trajectory is None else getattr(trajectory, "active_sine_phase", "")),
+        "active_J_load": value(None if load_params is None else getattr(load_params, "J_load", "")),
+        "active_B_load": value(None if load_params is None else getattr(load_params, "B_load", "")),
+        "active_coulomb_friction": value(None if load_params is None else getattr(load_params, "coulomb_friction", "")),
+        "active_gravity_torque_coeff": value(
+            None if load_params is None else getattr(load_params, "gravity_torque_coeff", "")
+        ),
+        "gear_efficiency": value(None if gearbox_spec is None else getattr(gearbox_spec, "efficiency_nominal", "")),
+        "encoder_noise_std_rad": value(getattr(base_env, "encoder_noise_std", "")),
+        "vdc_scale": value(
+            float(getattr(base_env, "Vdc", 0.0)) / max(float(getattr(base_env, "Vdc_nominal", 1.0)), 1e-9)
+        ),
+        "disturbance_torque_nm": value(None if load_spec is None else getattr(load_spec, "disturbance_torque_nm", "")),
+        "disturbance_step_nm": value(None if load_spec is None else getattr(load_spec, "disturbance_step_nm", "")),
+        "disturbance_step_time_s": value(None if load_spec is None else getattr(load_spec, "disturbance_step_time_s", "")),
+    }
+
+
 def _resolve_controller_mode(train_cfg: Any, *, override: str | None, controller: str | None = None) -> str:
     configured = override if override not in (None, "") else getattr(train_cfg, "controller_mode", None)
     if configured in (None, "") and controller not in (None, ""):
@@ -221,11 +290,27 @@ def _make_pi_controller(
     return controller
 
 
+def _make_residual_baseline_controller(
+    *,
+    env: Any,
+    env_cfg: Any,
+    pi_cfg: Any,
+    baseline_controller: str,
+) -> PICurrentController | CascadeServoController:
+    spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
+    if str(spec.layout) == "gun_servo_position":
+        requested = str(baseline_controller or "pid").strip().lower()
+        if requested not in {"pid", "pd", "cascade", "cascade_pid"}:
+            raise ValueError(f"Unsupported gun-servo residual baseline_controller: {baseline_controller!r}")
+        return _make_cascade_servo_controller(spec=spec, env=env)
+    return _make_pi_controller(env=env, env_cfg=env_cfg, pi_cfg=pi_cfg)
+
+
 def _compose_env_action_for_training(
     *,
     obs: np.ndarray,
     policy_action: np.ndarray,
-    pi_controller: PICurrentController | None,
+    pi_controller: PICurrentController | CascadeServoController | None,
     action_low: float,
     action_high: float,
     residual_settings: Any,
@@ -397,12 +482,21 @@ def _evaluate_policy_with_metrics(
             apply_domain_randomization=False,
         )
     )
+    base_eval_env = getattr(eval_env, "unwrapped", eval_env)
+    if is_residual_controller(controller_mode):
+        apply_residual_action_scale_from_env(residual_settings, base_eval_env)
     returns: list[float] = []
     metric_rows: list[dict[str, float]] = []
+    done_reasons: list[str] = []
     action_low = float(eval_env.action_space.low.min())
     action_high = float(eval_env.action_space.high.max())
     pi_controller = (
-        _make_pi_controller(env=eval_env, env_cfg=env_cfg, pi_cfg=pi_cfg)
+        _make_residual_baseline_controller(
+            env=eval_env,
+            env_cfg=env_cfg,
+            pi_cfg=pi_cfg,
+            baseline_controller=residual_settings.baseline_controller,
+        )
         if is_residual_controller(controller_mode)
         else None
     )
@@ -440,10 +534,23 @@ def _evaluate_policy_with_metrics(
             )
             episode_return += float(reward)
             if bool(terminated or truncated):
+                if isinstance(_info, dict):
+                    done_reasons.append(str(_info.get("done_reason", "")))
+                else:
+                    done_reasons.append("terminated" if terminated else "truncated")
                 break
+        else:
+            done_reasons.append("episode_horizon")
         returns.append(float(episode_return))
     out = _summarize_eval_metric_rows(metric_rows)
     out["mean_return"] = float(sum(returns) / max(len(returns), 1))
+    omega_limit_count = sum(1 for reason in done_reasons if "omega_limit_violation" in str(reason))
+    unsafe_count = sum(1 for reason in done_reasons if "violation" in str(reason))
+    out["omega_limit_violation_count"] = float(omega_limit_count)
+    out["unsafe_done_count"] = float(unsafe_count)
+    out["safe_eval_count"] = float(max(0, len(done_reasons) - unsafe_count))
+    out["all_eval_safe"] = float(unsafe_count == 0)
+    out["done_reasons"] = "|".join(done_reasons)
     return out
 
 
@@ -455,8 +562,19 @@ def _best_metric_value(metrics: dict[str, float], metric_name: str) -> float:
     return float(metrics.get("mean_return", float("nan")))
 
 
-def _is_better_metric(candidate: float, current_best: float | None, metric_name: str) -> bool:
+def _is_better_metric(
+    candidate: float,
+    current_best: float | None,
+    metric_name: str,
+    *,
+    candidate_safe: bool = True,
+    current_best_safe: bool = True,
+) -> bool:
     if not np.isfinite(candidate):
+        return False
+    if candidate_safe and not current_best_safe:
+        return True
+    if current_best_safe and not candidate_safe:
         return False
     if current_best is None or not np.isfinite(float(current_best)):
         return True
@@ -495,12 +613,44 @@ def _write_best_checkpoint_metadata(
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _write_best_checkpoint_reason(
+    path: Path,
+    *,
+    checkpoint_path: Path,
+    global_step: int,
+    metric_name: str,
+    metric_value: float | None,
+    safe: bool,
+    done_reasons: str,
+    selection_reason: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metric_text = "nan" if metric_value is None else f"{float(metric_value):.9g}"
+    safe_text = "safe" if safe else "unsafe"
+    path.write_text(
+        "\n".join(
+            [
+                f"checkpoint_path: {checkpoint_path}",
+                f"global_step: {int(global_step)}",
+                f"metric_name: {metric_name}",
+                f"metric_value: {metric_text}",
+                f"safe_eval_status: {safe_text}",
+                f"eval_done_reasons: {done_reasons}",
+                f"best_checkpoint_reason: {selection_reason}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     """Run TD3/DDPG training loop with replay, periodic checkpointing, and lightweight eval."""
     args = build_arg_parser().parse_args()
 
     env_cfg = parse_env_config(args.env_config)
     train_cfg = parse_train_config(args.train_config)
+    raw_train_cfg = load_yaml(args.train_config)
     if args.run_name not in (None, ""):
         train_cfg.run_name = str(args.run_name)
     pi_cfg = parse_pi_config(args.pi_config)
@@ -518,22 +668,79 @@ def main() -> None:
     env_cfg = apply_train_action_smoothness_override(env_cfg, train_cfg)
     env_cfg = apply_train_domain_randomization_override(env_cfg, train_cfg)
     env_cfg, controller_apply_dr = _apply_gun_servo_controller_overrides(env_cfg, public_controller)
+    if isinstance(raw_train_cfg, dict) and "apply_domain_randomization" in raw_train_cfg:
+        controller_apply_dr = bool(raw_train_cfg.get("apply_domain_randomization"))
     effective_eval_config_path = _resolve_eval_config_path(train_cfg, override=args.eval_config)
+    train_scenario = getattr(train_cfg, "train_scenario", None)
+    train_scenarios = tuple(getattr(train_cfg, "train_scenarios", ()) or ())
+    base_train_env_cfg = env_cfg
+    scenario_rng = np.random.default_rng(int(env_cfg.seed))
+    scenario_probabilities = _scenario_probabilities(
+        train_scenarios,
+        raw_train_cfg.get("train_scenario_weights") if isinstance(raw_train_cfg, dict) else None,
+    )
+
+    def sample_train_scenario() -> str | None:
+        if train_scenarios:
+            return str(scenario_rng.choice(train_scenarios, p=scenario_probabilities))
+        if train_scenario not in (None, ""):
+            return str(train_scenario)
+        return None
+
+    current_train_scenario = sample_train_scenario()
+    if current_train_scenario not in (None, ""):
+        env_cfg = _maybe_apply_eval_scenario(base_train_env_cfg, effective_eval_config_path, str(current_train_scenario))
     eval_scenario = _resolve_eval_scenario(train_cfg, override=args.eval_scenario)
-    eval_env_cfg = _maybe_apply_eval_scenario(env_cfg, effective_eval_config_path, eval_scenario)
+    eval_source_env_cfg = base_train_env_cfg if train_scenarios else env_cfg
+    eval_env_cfg = _maybe_apply_eval_scenario(eval_source_env_cfg, effective_eval_config_path, eval_scenario)
     eval_env_cfg, _ = _apply_gun_servo_controller_overrides(eval_env_cfg, public_controller)
     best_checkpoint_metric = _resolve_best_checkpoint_metric(train_cfg)
     set_seed(int(env_cfg.seed))
 
-    env = make_train_env(
-        make_env_build_config(env_cfg, apply_domain_randomization=controller_apply_dr)
+    residual_mode = is_residual_controller(controller_mode)
+
+    def build_training_env_for_scenario(
+        scenario_name: str | None,
+        *,
+        seed_offset: int,
+    ) -> tuple[Any, Any, Any, Any]:
+        scenario_env_cfg = base_train_env_cfg
+        if scenario_name not in (None, ""):
+            scenario_env_cfg = _maybe_apply_eval_scenario(
+                base_train_env_cfg,
+                effective_eval_config_path,
+                str(scenario_name),
+            )
+        built_env = make_train_env(
+            make_env_build_config(
+                scenario_env_cfg,
+                seed_override=int(base_train_env_cfg.seed) + int(seed_offset),
+                apply_domain_randomization=controller_apply_dr,
+            )
+        )
+        built_base_env = getattr(built_env, "unwrapped", built_env)
+        if residual_mode:
+            apply_residual_action_scale_from_env(residual_settings, built_base_env)
+        built_pi_controller = (
+            _make_residual_baseline_controller(
+                env=built_env,
+                env_cfg=scenario_env_cfg,
+                pi_cfg=pi_cfg,
+                baseline_controller=residual_settings.baseline_controller,
+            )
+            if residual_mode
+            else None
+        )
+        return scenario_env_cfg, built_env, built_base_env, built_pi_controller
+
+    env_cfg, env, base_env, pi_controller = build_training_env_for_scenario(
+        current_train_scenario,
+        seed_offset=0,
     )
-    base_env = getattr(env, "unwrapped", env)
     obs_dim = int(env.observation_space.shape[0])
     act_dim = int(env.action_space.shape[0])
     action_low = float(env.action_space.low.min())
     action_high = float(env.action_space.high.max())
-    residual_mode = is_residual_controller(controller_mode)
     agent_action_low, agent_action_high = (
         residual_agent_action_bounds(
             action_low=action_low,
@@ -543,7 +750,6 @@ def main() -> None:
         if residual_mode
         else (action_low, action_high)
     )
-    pi_controller = _make_pi_controller(env=env, env_cfg=env_cfg, pi_cfg=pi_cfg) if residual_mode else None
 
     episode_horizon = _resolve_episode_horizon(env_cfg, train_cfg, override=args.max_steps)
     eval_episode_horizon = _resolve_episode_horizon(eval_env_cfg, train_cfg, override=args.max_steps)
@@ -577,6 +783,15 @@ def main() -> None:
         action_low=agent_action_low,
         action_high=agent_action_high,
     )
+    initial_checkpoint = getattr(train_cfg, "initial_checkpoint", None)
+    if initial_checkpoint not in (None, ""):
+        initial_checkpoint_path = Path(str(initial_checkpoint))
+        if not initial_checkpoint_path.is_absolute():
+            initial_checkpoint_path = ROOT / initial_checkpoint_path
+        if not initial_checkpoint_path.exists():
+            raise FileNotFoundError(f"Initial checkpoint not found: {initial_checkpoint}")
+        agent.load_checkpoint(initial_checkpoint_path, map_location=train_cfg.device)
+        print(f"loaded initial checkpoint: {initial_checkpoint_path}")
     replay = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, capacity=int(train_cfg.replay_capacity))
 
     layout = ensure_run_layout(make_run_layout(train_cfg.run_name, train_cfg.output_dir))
@@ -602,7 +817,10 @@ def main() -> None:
 
     latest_ckpt = layout.checkpoints_dir / "checkpoint_latest.pt"
     best_ckpt = layout.checkpoints_dir / "checkpoint_best.pt"
+    latest_ckpt_alias = layout.checkpoints_dir / "latest.pt"
+    best_ckpt_alias = layout.checkpoints_dir / "best.pt"
     best_ckpt_meta = layout.run_dir / "best_checkpoint.json"
+    best_ckpt_reason = layout.summaries_dir / "best_checkpoint.txt"
     reward_mode = str(getattr(getattr(env_cfg, "reward", None), "mode", ""))
     print(
         "components "
@@ -615,6 +833,7 @@ def main() -> None:
         f"action_smoothness={bool(getattr(base_env, 'action_smoothness_enabled', False))} "
         f"action_smoothness_weight={float(getattr(base_env, 'action_smoothness_weight', 0.0)):.4f} "
         f"domain_randomization={bool(getattr(base_env, 'apply_domain_randomization', False))} "
+        f"train_scenario={','.join(train_scenarios) if train_scenarios else (train_scenario or '')} "
         f"eval_scenario={eval_scenario or ''} "
         f"best_checkpoint_metric={best_checkpoint_metric}"
     )
@@ -630,6 +849,7 @@ def main() -> None:
     latest_eval_return: float | None = None
     latest_eval_metrics: dict[str, float] = {}
     best_eval_metric_value: float | None = None
+    best_eval_was_safe = False
     current_exploration_noise = float(train_cfg.exploration_noise)
     next_eval_step = int(eval_every_steps) if eval_every_steps is not None and eval_every_steps > 0 else None
     next_save_step = int(save_every_steps) if save_every_steps is not None and save_every_steps > 0 else None
@@ -639,24 +859,51 @@ def main() -> None:
             f,
             fieldnames=[
                 "episode",
+                "step",
                 "episode_steps",
+                "episode_length",
                 "global_steps",
                 "episode_return",
                 "buffer_size",
                 "avg_actor_loss",
+                "actor_loss",
                 "avg_critic_loss",
+                "critic_loss",
                 "avg_actor_updates",
                 "current_exploration_noise",
                 "latest_eval_return",
+                "eval_return",
                 "eval_rmse_i_d",
                 "eval_rmse_i_q",
                 "eval_rmse_all",
                 "eval_rmse_theta",
+                "eval_rmse_theta_deg",
                 "eval_mae_theta",
                 "eval_mae_all",
                 "eval_pre_rmse_all",
                 "eval_post_rmse_all",
                 "eval_saturation_count",
+                "done_reason",
+                "train_scenario",
+                "train_scenario_family",
+                "sampled_theta_initial_deg",
+                "sampled_theta_final_deg",
+                "sampled_step_time_s",
+                "sampled_max_speed_deg_s",
+                "sampled_max_accel_deg_s2",
+                "sampled_sine_amplitude_deg",
+                "sampled_sine_frequency_hz",
+                "sampled_sine_phase_rad",
+                "active_J_load",
+                "active_B_load",
+                "active_coulomb_friction",
+                "active_gravity_torque_coeff",
+                "gear_efficiency",
+                "encoder_noise_std_rad",
+                "vdc_scale",
+                "disturbance_torque_nm",
+                "disturbance_step_nm",
+                "disturbance_step_time_s",
                 "saved_checkpoint",
                 "checkpoint_path",
             ],
@@ -690,6 +937,7 @@ def main() -> None:
             episode_steps += 1
             episode_return += float(reward)
             done = bool(terminated or truncated)
+            done_reason = str(_info.get("done_reason", "")) if isinstance(_info, dict) else ""
             reached_step_limit = episode_steps >= episode_horizon
             replay.push(obs=obs, act=action, rew=float(reward), next_obs=next_obs, done=done or reached_step_limit)
             obs = next_obs
@@ -730,9 +978,18 @@ def main() -> None:
                     f"post_rmse_all={float(latest_eval_metrics.get('post_rmse_all', float('nan'))):.6f}"
                 )
                 candidate_metric = _best_metric_value(latest_eval_metrics, best_checkpoint_metric)
-                if _is_better_metric(candidate_metric, best_eval_metric_value, best_checkpoint_metric):
+                candidate_safe = bool(float(latest_eval_metrics.get("unsafe_done_count", 0.0)) <= 0.0)
+                if _is_better_metric(
+                    candidate_metric,
+                    best_eval_metric_value,
+                    best_checkpoint_metric,
+                    candidate_safe=candidate_safe,
+                    current_best_safe=best_eval_was_safe,
+                ):
                     best_eval_metric_value = float(candidate_metric)
+                    best_eval_was_safe = bool(candidate_safe)
                     agent.save_checkpoint(best_ckpt)
+                    shutil.copy2(best_ckpt, best_ckpt_alias)
                     metadata_metric_name = (
                         f"eval_{best_checkpoint_metric}"
                         if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
@@ -743,6 +1000,10 @@ def main() -> None:
                         if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
                         else "periodic_eval_return_improved"
                     )
+                    if candidate_safe:
+                        selection_reason += "_safe"
+                    else:
+                        selection_reason += "_unsafe_no_safe_checkpoint_yet"
                     _write_best_checkpoint_metadata(
                         best_ckpt_meta,
                         checkpoint_path=best_ckpt,
@@ -756,6 +1017,16 @@ def main() -> None:
                         eval_scenario=eval_scenario,
                         eval_config_path=effective_eval_config_path,
                     )
+                    _write_best_checkpoint_reason(
+                        best_ckpt_reason,
+                        checkpoint_path=best_ckpt,
+                        global_step=global_step,
+                        metric_name=metadata_metric_name,
+                        metric_value=best_eval_metric_value,
+                        safe=candidate_safe,
+                        done_reasons=str(latest_eval_metrics.get("done_reasons", "")),
+                        selection_reason=selection_reason,
+                    )
                     print(
                         f"updated best checkpoint: {best_ckpt} "
                         f"({metadata_metric_name}={best_eval_metric_value:.6f}, step={global_step})"
@@ -768,6 +1039,7 @@ def main() -> None:
                 checkpoint = layout.checkpoints_dir / f"checkpoint_step_{global_step}.pt"
                 agent.save_checkpoint(checkpoint)
                 agent.save_checkpoint(latest_ckpt)
+                shutil.copy2(latest_ckpt, latest_ckpt_alias)
                 saved_checkpoint = 1
                 checkpoint_path = str(checkpoint)
                 print(f"saved checkpoints: {checkpoint} and {latest_ckpt}")
@@ -779,27 +1051,37 @@ def main() -> None:
                 avg_actor_updates = (
                     sum(actor_update_counts) / len(actor_update_counts) if actor_update_counts else 0.0
                 )
+                episode_metadata = _episode_metadata(base_env, current_train_scenario)
                 writer.writerow(
                     {
                         "episode": episode_idx,
+                        "step": global_step,
                         "episode_steps": episode_steps,
+                        "episode_length": episode_steps,
                         "global_steps": global_step,
                         "episode_return": episode_return,
                         "buffer_size": len(replay),
                         "avg_actor_loss": avg_actor,
+                        "actor_loss": avg_actor,
                         "avg_critic_loss": avg_critic,
+                        "critic_loss": avg_critic,
                         "avg_actor_updates": avg_actor_updates,
                         "current_exploration_noise": current_exploration_noise,
                         "latest_eval_return": "" if latest_eval_return is None else latest_eval_return,
+                        "eval_return": "" if latest_eval_return is None else latest_eval_return,
                         "eval_rmse_i_d": latest_eval_metrics.get("rmse_i_d", ""),
                         "eval_rmse_i_q": latest_eval_metrics.get("rmse_i_q", ""),
                         "eval_rmse_all": latest_eval_metrics.get("rmse_all", ""),
                         "eval_rmse_theta": latest_eval_metrics.get("rmse_theta", ""),
+                        "eval_rmse_theta_deg": latest_eval_metrics.get("rmse_theta", ""),
                         "eval_mae_theta": latest_eval_metrics.get("mae_theta", ""),
                         "eval_mae_all": latest_eval_metrics.get("mae_all", ""),
                         "eval_pre_rmse_all": latest_eval_metrics.get("pre_rmse_all", ""),
                         "eval_post_rmse_all": latest_eval_metrics.get("post_rmse_all", ""),
                         "eval_saturation_count": latest_eval_metrics.get("saturation_count", ""),
+                        "done_reason": done_reason or ("episode_horizon" if reached_step_limit else ""),
+                        "train_scenario": current_train_scenario or "",
+                        **episode_metadata,
                         "saved_checkpoint": saved_checkpoint,
                         "checkpoint_path": checkpoint_path,
                     }
@@ -813,9 +1095,19 @@ def main() -> None:
                 )
 
                 episode_idx += 1
-                obs, _info = env.reset()
-                if pi_controller is not None:
-                    pi_controller.reset()
+                if train_scenarios:
+                    current_train_scenario = sample_train_scenario()
+                    if hasattr(env, "close"):
+                        env.close()
+                    env_cfg, env, base_env, pi_controller = build_training_env_for_scenario(
+                        current_train_scenario,
+                        seed_offset=episode_idx,
+                    )
+                    obs, _info = env.reset(seed=int(base_train_env_cfg.seed) + episode_idx)
+                else:
+                    obs, _info = env.reset()
+                    if pi_controller is not None:
+                        pi_controller.reset()
                 episode_steps = 0
                 episode_return = 0.0
                 actor_losses = []
@@ -826,27 +1118,37 @@ def main() -> None:
             avg_actor = sum(actor_losses) / len(actor_losses) if actor_losses else 0.0
             avg_critic = sum(critic_losses) / len(critic_losses) if critic_losses else 0.0
             avg_actor_updates = sum(actor_update_counts) / len(actor_update_counts) if actor_update_counts else 0.0
+            episode_metadata = _episode_metadata(base_env, current_train_scenario)
             writer.writerow(
                 {
                     "episode": episode_idx,
+                    "step": total_steps,
                     "episode_steps": episode_steps,
+                    "episode_length": episode_steps,
                     "global_steps": total_steps,
                     "episode_return": episode_return,
                     "buffer_size": len(replay),
                     "avg_actor_loss": avg_actor,
+                    "actor_loss": avg_actor,
                     "avg_critic_loss": avg_critic,
+                    "critic_loss": avg_critic,
                     "avg_actor_updates": avg_actor_updates,
                     "current_exploration_noise": current_exploration_noise,
                     "latest_eval_return": "" if latest_eval_return is None else latest_eval_return,
+                    "eval_return": "" if latest_eval_return is None else latest_eval_return,
                     "eval_rmse_i_d": latest_eval_metrics.get("rmse_i_d", ""),
                     "eval_rmse_i_q": latest_eval_metrics.get("rmse_i_q", ""),
                     "eval_rmse_all": latest_eval_metrics.get("rmse_all", ""),
                     "eval_rmse_theta": latest_eval_metrics.get("rmse_theta", ""),
+                    "eval_rmse_theta_deg": latest_eval_metrics.get("rmse_theta", ""),
                     "eval_mae_theta": latest_eval_metrics.get("mae_theta", ""),
                     "eval_mae_all": latest_eval_metrics.get("mae_all", ""),
                     "eval_pre_rmse_all": latest_eval_metrics.get("pre_rmse_all", ""),
                     "eval_post_rmse_all": latest_eval_metrics.get("post_rmse_all", ""),
                     "eval_saturation_count": latest_eval_metrics.get("saturation_count", ""),
+                    "done_reason": "partial_episode",
+                    "train_scenario": current_train_scenario or "",
+                    **episode_metadata,
                     "saved_checkpoint": 0,
                     "checkpoint_path": "",
                 }
@@ -854,8 +1156,10 @@ def main() -> None:
             f.flush()
 
     agent.save_checkpoint(latest_ckpt)
+    shutil.copy2(latest_ckpt, latest_ckpt_alias)
     if best_eval_metric_value is None:
         agent.save_checkpoint(best_ckpt)
+        shutil.copy2(best_ckpt, best_ckpt_alias)
         _write_best_checkpoint_metadata(
             best_ckpt_meta,
             checkpoint_path=best_ckpt,
@@ -873,7 +1177,24 @@ def main() -> None:
             eval_scenario=eval_scenario,
             eval_config_path=effective_eval_config_path,
         )
+        _write_best_checkpoint_reason(
+            best_ckpt_reason,
+            checkpoint_path=best_ckpt,
+            global_step=total_steps,
+            metric_name=(
+                f"eval_{best_checkpoint_metric}"
+                if best_checkpoint_metric in {"rmse_all", "rmse_theta"}
+                else "mean_eval_return"
+            ),
+            metric_value=None,
+            safe=False,
+            done_reasons="no_periodic_eval",
+            selection_reason="fallback_latest_no_periodic_eval; no safe checkpoint found",
+        )
         print(f"saved fallback best checkpoint: {best_ckpt}")
+    elif not best_eval_was_safe:
+        existing = best_ckpt_reason.read_text(encoding="utf-8") if best_ckpt_reason.exists() else ""
+        best_ckpt_reason.write_text(existing + "note: no safe checkpoint was found during periodic evaluation.\n", encoding="utf-8")
     print(f"saved final checkpoint: {latest_ckpt}")
 
 

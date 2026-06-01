@@ -27,6 +27,10 @@ class ResidualControlSettings:
     residual_scale: float = 0.2
     residual_action_clip: float | None = 0.3
     residual_zero_test: bool = False
+    baseline_controller: str = "pi"
+    baseline_weight: float = 1.0
+    residual_weight: float = 1.0
+    residual_action_scale_deg_s: float | None = None
 
 
 def normalize_controller_name(value: Any) -> str:
@@ -65,7 +69,7 @@ def gun_servo_controller_overrides(value: Any) -> dict[str, Any]:
             },
             "apply_domain_randomization": False,
         }
-    if name in {"sc_td3_pi", "pid_pi_foc", "pid", "pi", "rl"}:
+    if name in {"sc_td3_pi", "pid_pi_foc", "pid", "pi", "rl", "residual"}:
         return {
             "safety": {
                 "enable_u_safe": True,
@@ -108,6 +112,14 @@ def resolve_residual_settings(
     scale = _first_config_value(configs, "residual_scale", defaults.residual_scale)
     clip = _first_config_value(configs, "residual_action_clip", defaults.residual_action_clip)
     zero_test = _first_config_value(configs, "residual_zero_test", defaults.residual_zero_test)
+    baseline_controller = _first_config_value(configs, "residual_baseline_controller", defaults.baseline_controller)
+    baseline_weight = _first_config_value(configs, "residual_baseline_weight", defaults.baseline_weight)
+    residual_weight = _first_config_value(configs, "residual_weight", defaults.residual_weight)
+    action_scale_deg_s = _first_config_value(
+        configs,
+        "residual_action_scale_deg_s",
+        defaults.residual_action_scale_deg_s,
+    )
 
     if residual_scale_override is not None:
         scale = residual_scale_override
@@ -121,7 +133,22 @@ def resolve_residual_settings(
         residual_scale=float(scale),
         residual_action_clip=clip_value,
         residual_zero_test=bool(zero_test),
+        baseline_controller=str(baseline_controller),
+        baseline_weight=float(baseline_weight),
+        residual_weight=float(residual_weight),
+        residual_action_scale_deg_s=None if action_scale_deg_s in (None, "") else abs(float(action_scale_deg_s)),
     )
+
+
+def apply_residual_action_scale_from_env(settings: ResidualControlSettings, base_env: Any) -> None:
+    """Resolve a degree-per-second residual scale against a gun-servo env."""
+    scale_deg_s = settings.residual_action_scale_deg_s
+    if scale_deg_s in (None, ""):
+        return
+    max_delta = abs(float(getattr(base_env, "max_delta_omega", 0.0)))
+    if max_delta <= 0.0:
+        return
+    settings.residual_scale = float(np.deg2rad(float(scale_deg_s)) / max_delta)
 
 
 def residual_agent_action_bounds(
@@ -157,8 +184,10 @@ def compose_residual_action(
         limit = abs(float(settings.residual_action_clip))
         raw_clipped = np.clip(raw, -limit, limit).astype(np.float32, copy=False)
 
-    residual = (float(settings.residual_scale) * raw_clipped).astype(np.float32, copy=False)
-    total = (pi + residual).astype(np.float32, copy=False)
+    residual = (
+        float(settings.residual_weight) * float(settings.residual_scale) * raw_clipped
+    ).astype(np.float32, copy=False)
+    total = (float(settings.baseline_weight) * pi + residual).astype(np.float32, copy=False)
     total_clipped = np.clip(total, float(action_low), float(action_high)).astype(np.float32, copy=False)
     return {
         "action_pi": pi.astype(np.float32, copy=False),

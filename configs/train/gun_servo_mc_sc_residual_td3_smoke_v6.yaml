@@ -1,0 +1,59 @@
+algorithm: td3
+algo: td3
+run_name: gun_servo_mc_sc_residual_td3_smoke_v6
+output_dir: outputs
+device: cpu
+seed: 0
+
+controller_mode: residual
+residual_control:
+  enabled: true
+  baseline_controller: pid
+  residual_action_scale_deg_s: 3.0
+  baseline_weight: 1.0
+  residual_weight: 1.0
+  residual_action_clip: 1.0
+
+# Episode-level uniform sampling over the four smoke-safe conditions.
+train_scenarios:
+  - C1a_5deg_step
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+
+eval_config: configs/eval/gun_servo_mc_sc_residual_td3_smoke_v6_eval.yaml
+eval_scenario: C1_10deg_step
+eval_metric: rmse_theta
+best_checkpoint_metric: rmse_theta
+
+total_steps: 300000
+max_episode_steps: 5000
+max_steps_per_episode: 5000
+replay_size: 100000
+replay_capacity: 100000
+batch_size: 128
+start_steps: 5000
+warmup_steps: 5000
+update_after: 5000
+
+gamma: 0.99
+tau: 0.005
+actor_lr: 1.0e-4
+critic_lr: 1.0e-3
+lr_actor: 1.0e-4
+lr_critic: 1.0e-3
+hidden_dim: 128
+
+policy_noise: 0.05
+target_policy_noise: 0.05
+noise_clip: 0.15
+target_noise_clip: 0.15
+policy_delay: 2
+exploration_noise: 0.04
+
+eval_interval: 10000
+eval_every_steps: 10000
+eval_episodes: 1
+save_interval: 10000
+save_every_steps: 10000
+log_every_steps: 1000

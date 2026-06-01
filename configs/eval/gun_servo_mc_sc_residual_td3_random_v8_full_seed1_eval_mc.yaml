@@ -1,0 +1,32 @@
+controller: residual
+run_name: gun_servo_mc_sc_residual_td3_random_v8_full_seed1
+task_name: gun_servo_position
+env_config: configs/env/gun_servo_position_mc_sc_residual_td3_v8_rand.yaml
+train_config: configs/train/gun_servo_mc_sc_residual_td3_random_v8_full_seed1.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+max_steps: 5000
+seed: 9008
+num_episodes: 100
+apply_domain_randomization: true
+summary_output_name: mc_eval_summary.csv
+episode_output_name: mc_eval_episode_metrics.csv
+td3_controller_label: mc_sc_residual_td3_v8_full
+
+scenario_families:
+  - random_step_safe
+  - random_trapezoid_safe
+  - random_sine_safe
+  - random_disturbance_after_settling
+
+scenario_family_weights:
+  random_step_safe: 0.30
+  random_trapezoid_safe: 0.25
+  random_sine_safe: 0.25
+  random_disturbance_after_settling: 0.20
+
+scenario_condition_map:
+  random_step_safe: random_step_safe_v8
+  random_trapezoid_safe: random_trapezoid_safe_v8
+  random_sine_safe: random_sine_safe_v8
+  random_disturbance_after_settling: random_disturbance_after_settling_v8

@@ -1,0 +1,41 @@
+controller: smc
+env_config: configs/env/gun_servo_position.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+run_name: gun_servo_smc_baseline
+task_name: gun_servo_position
+max_steps: 5000
+seed: 0
+num_repeats: 1
+settling_threshold_deg: 0.02
+save_csv: true
+save_summary: true
+save_figures: true
+
+smc_controller:
+  lambda_smc: 6.0
+  k_e: 4.0
+  k_s_deg_s: 4.0
+  phi_rad_s: 0.06
+  k_d: 0.25
+
+scenarios:
+  - C1a_5deg_step
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+  - C4a_sine_tracking_safe
+  - C5a_disturbance_after_settling
+
+scenario_condition_map:
+  C1a_5deg_step: step_5deg_sc_residual_td3_v5
+  C1_10deg_step: step_10deg_sc_residual_td3_v5
+  C2a_20deg_step_safe: step_20deg_speed_limited_sc_residual_td3_v5
+  C3_trapezoid_tracking: trapezoid_15deg_sc_residual_td3_v5
+  C4a_sine_tracking_safe: sine_tracking_safe_pid_v2
+  C5a_disturbance_after_settling: disturbance_after_settling_pid_v2
+
+pid_baseline_summary: outputs/runs/gun_servo_pid_smoke_v2/summaries/pid_smoke_summary.csv
+pid_baseline_comparison_summary: outputs/runs/gun_servo_mc_sc_residual_td3_random_v8_full_seed0/summaries/mc_sc_residual_td3_v8_full_vs_pid_v2_summary.csv
+v8_full_aggregate_summary: outputs/runs/gun_servo_mc_sc_residual_td3_random_v8_full_aggregate/summaries/fixed_eval_mean_std.csv
+v8_full_seed_summary_glob: outputs/runs/gun_servo_mc_sc_residual_td3_random_v8_full_seed*/summaries/mc_sc_residual_td3_v8_full_fixed_summary.csv

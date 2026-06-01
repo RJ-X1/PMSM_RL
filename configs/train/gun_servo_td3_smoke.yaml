@@ -1,0 +1,44 @@
+algorithm: td3
+algo: td3
+run_name: gun_servo_td3_smoke_c1
+output_dir: outputs
+device: cpu
+seed: 0
+
+train_scenario: C1_10deg_step
+eval_config: configs/eval/gun_servo_td3_smoke_eval.yaml
+eval_scenario: C1_10deg_step
+eval_metric: rmse_theta
+best_checkpoint_metric: rmse_theta
+
+total_steps: 20000
+max_episode_steps: 1000
+max_steps_per_episode: 1000
+replay_size: 100000
+replay_capacity: 100000
+batch_size: 128
+start_steps: 1000
+warmup_steps: 1000
+update_after: 1000
+
+gamma: 0.99
+tau: 0.005
+actor_lr: 3.0e-4
+critic_lr: 1.0e-3
+lr_actor: 3.0e-4
+lr_critic: 1.0e-3
+hidden_dim: 128
+
+policy_noise: 0.1
+target_policy_noise: 0.1
+noise_clip: 0.3
+target_noise_clip: 0.3
+policy_delay: 2
+exploration_noise: 0.1
+
+eval_interval: 5000
+eval_every_steps: 5000
+eval_episodes: 1
+save_interval: 5000
+save_every_steps: 5000
+log_every_steps: 500

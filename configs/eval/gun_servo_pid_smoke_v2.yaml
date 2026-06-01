@@ -1,0 +1,39 @@
+controller: pid
+env_config: configs/env/gun_servo_position.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+run_name: gun_servo_pid_smoke_v2
+task_name: gun_servo_position
+num_repeats: 1
+max_steps: null
+seed: 0
+episode_time_s: 5.0
+settling_threshold_deg: 0.02
+aux_settling_threshold_deg: 0.1
+save_csv: true
+save_summary: true
+save_figures: true
+
+scenarios:
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+  - C4a_sine_tracking_safe
+  - C5a_disturbance_after_settling
+
+aggressive_scenarios:
+  - C2b_20deg_step_aggressive
+  - C4_sine_tracking_aggressive
+
+scenario_episode_time_s:
+  C4a_sine_tracking_safe: 10.0
+  C5a_disturbance_after_settling: 6.0
+
+scenario_condition_map:
+  C1_10deg_step: step_10deg_pid_v2
+  C2a_20deg_step_safe: step_20deg_speed_limited_pid_v2
+  C3_trapezoid_tracking: trapezoid_15deg_pid_v2
+  C4a_sine_tracking_safe: sine_tracking_safe_pid_v2
+  C5a_disturbance_after_settling: disturbance_after_settling_pid_v2
+  C2b_20deg_step_aggressive: step_20deg_aggressive
+  C4_sine_tracking_aggressive: sine_tracking_aggressive

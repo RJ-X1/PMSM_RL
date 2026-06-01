@@ -47,8 +47,15 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
         "reward_action",
         "reward_torque",
         "reward_safety",
+        "reward_progress",
+        "reward_speed_limit",
+        "reward_command_speed_limit",
+        "reward_flag_u",
+        "reward_flag_e",
+        "reward_action_magnitude",
         "reward_action_smoothness",
         "reward_saturation",
+        "reward_terminal",
         "reward_total",
     )
 
@@ -282,13 +289,29 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
         self.reward_mode = str(self.reward_cfg.get("mode", "quadratic_tracking"))
         self.w_theta = float(self.reward_cfg.get("w_theta", 1.0))
         self.w_omega = float(self.reward_cfg.get("w_omega", 0.1))
-        self.w_action = float(self.reward_cfg.get("w_action", self.reward_cfg.get("w_action_smoothness", 0.02)))
+        self.w_action = float(
+            self.reward_cfg.get(
+                "action_rate_weight",
+                self.reward_cfg.get("w_action", self.reward_cfg.get("w_action_smoothness", 0.02)),
+            )
+        )
         self.w_torque = float(self.reward_cfg.get("w_torque", 0.02))
         self.w_safety = float(self.reward_cfg.get("w_safety", self.safety_penalty))
         self.w_iq = float(self.reward_cfg.get("w_iq", 0.0))
+        self.w_progress = float(self.reward_cfg.get("w_progress", 0.0))
+        self.w_speed_limit = float(self.reward_cfg.get("speed_margin_weight", self.reward_cfg.get("w_speed_limit", 0.0)))
+        self.w_command_speed_limit = float(
+            self.reward_cfg.get("command_speed_margin_weight", self.reward_cfg.get("command_speed_limit_weight", 0.0))
+        )
+        self.w_flag_u = float(self.reward_cfg.get("safety_flag_u_weight", self.reward_cfg.get("w_flag_u", 0.0)))
+        self.w_flag_e = float(self.reward_cfg.get("safety_flag_e_weight", self.reward_cfg.get("w_flag_e", 0.0)))
+        self.w_action_magnitude = float(
+            self.reward_cfg.get("residual_action_weight", self.reward_cfg.get("action_magnitude_weight", 0.0))
+        )
+        self.w_saturation = float(self.reward_cfg.get("command_saturation_weight", self.reward_cfg.get("w_saturation", 0.0)))
+        self.w_terminal = float(self.reward_cfg.get("unsafe_done_weight", self.reward_cfg.get("w_terminal", 0.0)))
+        self.speed_limit_soft_ratio = float(np.clip(float(self.reward_cfg.get("speed_limit_soft_ratio", 0.85)), 0.0, 1.0))
         self.w_action_smoothness = float(self.w_action)
-        self.w_saturation = float(self.reward_cfg.get("w_saturation", 0.0))
-        self.w_terminal = float(self.reward_cfg.get("w_terminal", 0.0))
         self.action_smoothness_enabled = True
         self.action_smoothness_weight = float(self.w_action)
 
@@ -327,6 +350,7 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
         self.prev_action = 0.0
         self.prev_a_safe = 0.0
         self.prev_delta_omega = 0.0
+        self.prev_abs_e_theta = 0.0
         self.prev_omega_cmd = 0.0
         self.last_trajectory = TrajectoryPoint(0.0, 0.0, 0.0)
         self.last_action_raw = 0.0
@@ -464,6 +488,12 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             return float(lo)
         return float(self.np_random.uniform(lo, hi))
 
+    def _sample_optional_config_range(self, key: str) -> float | None:
+        value = self.load_cfg.get(key)
+        if value is None:
+            return None
+        return self._sample_uniform(self._float_range(value, default=(0.0, 0.0)))
+
     def _sample_domain_randomization(self) -> None:
         load_spec = replace(self.nominal_load_spec)
         gearbox_spec = replace(self.gearbox_spec)
@@ -517,6 +547,23 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             j_scale = b_scale = f_scale = g_scale = 1.0
             noise_rad = float(self.nominal_encoder_spec.noise_std_rad)
 
+        disturbance_step = self._sample_optional_config_range("disturbance_step_nm_range")
+        disturbance_step_time = self._sample_optional_config_range("disturbance_step_time_s_range")
+        if disturbance_step is not None or disturbance_step_time is not None:
+            load_spec = replace(
+                load_spec,
+                disturbance_step_nm=(
+                    float(load_spec.disturbance_step_nm)
+                    if disturbance_step is None
+                    else float(disturbance_step)
+                ),
+                disturbance_step_time_s=(
+                    float(load_spec.disturbance_step_time_s)
+                    if disturbance_step_time is None
+                    else float(disturbance_step_time)
+                ),
+            )
+
         self.active_load_spec = load_spec
         self.active_gearbox_spec = gearbox_spec
         self.Vdc = float(self.Vdc_nominal) * float(vdc_scale)
@@ -532,6 +579,8 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             "friction_scale": float(f_scale),
             "gravity_torque_scale": float(g_scale),
             "disturbance_torque": float(load_spec.disturbance_torque_nm),
+            "disturbance_step": float(load_spec.disturbance_step_nm),
+            "disturbance_step_time": float(load_spec.disturbance_step_time_s),
             "encoder_noise_std": float(self.encoder_noise_std),
             "gear_efficiency": float(self.active_gearbox_spec.efficiency_nominal),
             "vdc_scale": float(vdc_scale),
@@ -578,24 +627,73 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
         delta_a_safe: float,
         t_out: float,
         sigma_safe: int,
+        omega_l: float,
+        unsafe_terminal: bool,
     ) -> tuple[float, OrderedDict[str, float]]:
         e_theta_n = float(e_theta) / self.theta_scale
         e_omega_n = float(e_omega) / self.omega_scale
         t_out_n = float(t_out) / max(float(self.active_gearbox_spec.output_torque_limit_nm), 1e-6)
+        progress_n = (float(self.prev_abs_e_theta) - abs(float(e_theta))) / self.theta_scale
+        speed_limit = max(float(self.active_load_spec.omega_limit_rad_s), 1e-9)
+        speed_ratio = abs(float(omega_l)) / speed_limit
+        speed_margin = max(0.0, (speed_ratio - self.speed_limit_soft_ratio) / max(1.0 - self.speed_limit_soft_ratio, 1e-6))
+        command_ratio = abs(float(self.last_omega_cmd_safe)) / speed_limit
+        command_margin = max(
+            0.0,
+            (command_ratio - self.speed_limit_soft_ratio) / max(1.0 - self.speed_limit_soft_ratio, 1e-6),
+        )
+        saturation_active = float(
+            bool(
+                self.last_speed_saturation
+                or self.last_accel_saturation
+                or self.last_current_saturation
+                or self.last_motor_torque_saturation
+                or self.last_gear_torque_saturation
+            )
+        )
         reward_theta = -self.w_theta * e_theta_n**2
         reward_omega = -self.w_omega * e_omega_n**2
         reward_action = -self.w_action * float(delta_a_safe) ** 2
         reward_torque = -self.w_torque * t_out_n**2
         reward_safety = -self.w_safety * float(sigma_safe)
-        total = float(reward_theta + reward_omega + reward_action + reward_torque + reward_safety)
+        reward_progress = self.w_progress * progress_n
+        reward_speed_limit = -self.w_speed_limit * speed_margin**2
+        reward_command_speed_limit = -self.w_command_speed_limit * command_margin**2
+        reward_flag_u = -self.w_flag_u * float(self.last_flag_u_safe)
+        reward_flag_e = -self.w_flag_e * float(self.last_flag_e_safe)
+        reward_action_magnitude = -self.w_action_magnitude * float(self.last_action_safe) ** 2
+        reward_saturation = -self.w_saturation * saturation_active
+        reward_terminal = -self.w_terminal * float(bool(unsafe_terminal))
+        total = float(
+            reward_theta
+            + reward_omega
+            + reward_action
+            + reward_torque
+            + reward_safety
+            + reward_progress
+            + reward_speed_limit
+            + reward_command_speed_limit
+            + reward_flag_u
+            + reward_flag_e
+            + reward_action_magnitude
+            + reward_saturation
+            + reward_terminal
+        )
         terms = OrderedDict(
             reward_theta=float(reward_theta),
             reward_omega=float(reward_omega),
             reward_action=float(reward_action),
             reward_torque=float(reward_torque),
             reward_safety=float(reward_safety),
+            reward_progress=float(reward_progress),
+            reward_speed_limit=float(reward_speed_limit),
+            reward_command_speed_limit=float(reward_command_speed_limit),
+            reward_flag_u=float(reward_flag_u),
+            reward_flag_e=float(reward_flag_e),
+            reward_action_magnitude=float(reward_action_magnitude),
             reward_action_smoothness=float(reward_action),
-            reward_saturation=float(reward_safety),
+            reward_saturation=float(reward_saturation),
+            reward_terminal=float(reward_terminal),
             reward_total=total,
         )
         return total, terms
@@ -729,6 +827,8 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             "TL_Nm": float(self.T_L_hat),
             "disturbance_nm": float(self.disturbance_torque),
             "disturbance_torque_Nm": float(self.disturbance_torque),
+            "disturbance_step_Nm": float(self.active_load_spec.disturbance_step_nm),
+            "disturbance_step_time_s": float(self.active_load_spec.disturbance_step_time_s),
             "reward": float(reward),
             "reward_terms": dict(self.last_reward_terms),
             "domain_randomization_active": bool(self.last_randomization_sample.get("domain_randomization_active", False)),
@@ -740,6 +840,14 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             "gear_ratio": float(self.active_gearbox_spec.ratio),
             "gear_efficiency": float(self.active_gearbox_spec.efficiency_nominal),
             "gear_output_torque_limit_nm": float(self.active_gearbox_spec.output_torque_limit_nm),
+            "sampled_theta_initial_deg": float(self.trajectory.theta_initial * RAD_TO_DEG),
+            "sampled_theta_final_deg": float(self.trajectory.theta_final * RAD_TO_DEG),
+            "sampled_step_time_s": float(getattr(self.trajectory, "active_step_time", 0.0)),
+            "sampled_max_speed_deg_s": float(getattr(self.trajectory, "active_max_speed", 0.0) * RAD_TO_DEG),
+            "sampled_max_accel_deg_s2": float(getattr(self.trajectory, "active_max_accel", 0.0) * RAD_TO_DEG),
+            "sampled_sine_amplitude_deg": float(getattr(self.trajectory, "active_sine_amplitude", 0.0) * RAD_TO_DEG),
+            "sampled_sine_frequency_hz": float(getattr(self.trajectory, "active_sine_frequency_hz", 0.0)),
+            "sampled_sine_phase_rad": float(getattr(self.trajectory, "active_sine_phase", 0.0)),
         }
 
     def reset(
@@ -768,6 +876,7 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
         self.prev_delta_omega = 0.0
         self.prev_omega_cmd = 0.0
         self.last_trajectory = self._current_trajectory()
+        self.prev_abs_e_theta = abs(float(self.last_trajectory.theta_ref - self.state.theta))
         self.last_action_raw = 0.0
         self.last_action_clip = 0.0
         self.last_action_safe = 0.0
@@ -965,10 +1074,13 @@ class GunServoPositionEnv(gym.Env[np.ndarray, np.ndarray]):
             delta_a_safe=self.last_delta_a_safe,
             t_out=self.T_out,
             sigma_safe=self.last_sigma_safe if self.enable_x_safe else 0,
+            omega_l=self.state.omega,
+            unsafe_terminal=terminated and "violation" in done_reason,
         )
         self.last_reward_terms = terms
         self.prev_action = self.last_action_safe
         self.prev_a_safe = self.last_action_safe
+        self.prev_abs_e_theta = abs(e_theta)
         self.prev_delta_omega = _raw_delta_omega
         self.prev_omega_cmd = omega_cmd
 

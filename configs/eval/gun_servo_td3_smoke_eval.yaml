@@ -1,0 +1,24 @@
+controller: rl
+run_name: gun_servo_td3_smoke_c1
+task_name: gun_servo_position
+env_config: configs/env/gun_servo_position.yaml
+train_config: configs/train/gun_servo_td3_smoke.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+pid_baseline_summary: outputs/runs/gun_servo_pid_smoke_v2/summaries/pid_smoke_summary.csv
+max_steps: 5000
+seed: 0
+num_repeats: 1
+save_csv: true
+save_summary: true
+save_figures: true
+
+scenarios:
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+
+scenario_condition_map:
+  C1_10deg_step: step_10deg_pid_v2
+  C2a_20deg_step_safe: step_20deg_speed_limited_pid_v2
+  C3_trapezoid_tracking: trapezoid_15deg_pid_v2

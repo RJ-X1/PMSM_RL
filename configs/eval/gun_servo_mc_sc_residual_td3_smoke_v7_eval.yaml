@@ -1,0 +1,42 @@
+controller: residual
+run_name: gun_servo_mc_sc_residual_td3_smoke_v7
+task_name: gun_servo_position
+env_config: configs/env/gun_servo_position_mc_sc_residual_td3_v7.yaml
+train_config: configs/train/gun_servo_mc_sc_residual_td3_smoke_v7.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+pid_baseline_summary: outputs/runs/gun_servo_pid_smoke_v2/summaries/pid_smoke_summary.csv
+pid_evaluate_missing_scenarios: true
+td3_baseline_summary: outputs/runs/gun_servo_mc_sc_residual_td3_smoke_v6/summaries/mc_sc_residual_td3_v6_smoke_summary.csv
+td3_baseline_controller_label: mc_sc_residual_td3_v6
+max_steps: 5000
+seed: 0
+num_repeats: 1
+save_csv: true
+save_summary: true
+save_figures: true
+comparison_output_name: mc_sc_residual_td3_v7_vs_pid_v2_summary.csv
+td3_comparison_output_name: mc_sc_residual_td3_v7_vs_v6_summary.csv
+summary_output_name: mc_sc_residual_td3_v7_smoke_summary.csv
+td3_controller_label: mc_sc_residual_td3_v7
+
+scenarios:
+  - C1a_5deg_step
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+  - C4a_sine_tracking_safe
+  - C5a_disturbance_after_settling
+
+scenario_condition_map:
+  C1a_5deg_step: step_5deg_sc_residual_td3_v5
+  C1_10deg_step: step_10deg_sc_residual_td3_v5
+  C2a_20deg_step_safe: step_20deg_speed_limited_sc_residual_td3_v5
+  C3_trapezoid_tracking: trapezoid_15deg_sc_residual_td3_v5
+  C4a_sine_tracking_safe: sine_tracking_safe_pid_v2
+  C5a_disturbance_after_settling: disturbance_after_settling_pid_v2
+
+additional_td3_comparisons:
+  - baseline_summary: outputs/runs/gun_servo_sc_residual_td3_smoke_v5/summaries/sc_residual_td3_v5_smoke_summary.csv
+    baseline_controller_label: sc_residual_td3_v5
+    output_name: mc_sc_residual_td3_v7_vs_v5_summary.csv

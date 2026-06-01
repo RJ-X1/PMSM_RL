@@ -41,6 +41,7 @@ from utils.experiment_factory import (
     resolve_agent_name,
 )
 from utils.residual_control import (
+    apply_residual_action_scale_from_env,
     compose_residual_action,
     gun_servo_controller_overrides,
     is_pid_pi_controller,
@@ -268,8 +269,9 @@ def _add_residual_row_fields(row: dict[str, Any], residual_trace: dict[str, Any]
     )
     for trace_key, column_prefix in labels:
         values = np.asarray(residual_trace[trace_key], dtype=np.float64).reshape(-1)
-        if values.size >= 2:
+        if values.size >= 1:
             row[f"{column_prefix}_d"] = float(values[0])
+        if values.size >= 2:
             row[f"{column_prefix}_q"] = float(values[1])
     row["residual_scale"] = float(settings.residual_scale)
     row["residual_action_clip"] = (
@@ -323,6 +325,11 @@ def _is_test1_condition(condition: dict[str, Any]) -> bool:
 
 def _find_eval_condition(eval_config_path: Path, scenario_name: str) -> dict[str, Any] | None:
     eval_cfg = parse_eval_config(eval_config_path)
+    raw_eval_cfg = load_yaml(eval_config_path)
+    scenario_map = raw_eval_cfg.get("scenario_condition_map", {})
+    mapped_scenario = scenario_name
+    if isinstance(scenario_map, dict):
+        mapped_scenario = str(scenario_map.get(scenario_name, scenario_name))
     conditions_path = _resolve_test_conditions_path(
         eval_config_path,
         str(eval_cfg.test_conditions_path),
@@ -332,7 +339,7 @@ def _find_eval_condition(eval_config_path: Path, scenario_name: str) -> dict[str
     if not isinstance(conditions, list):
         raise TypeError(f"Expected 'test_scenarios' to be a list in {conditions_path}")
     for condition in conditions:
-        if isinstance(condition, dict) and _scenario_matches(condition, scenario_name):
+        if isinstance(condition, dict) and _scenario_matches(condition, mapped_scenario):
             return condition
     return None
 
@@ -420,6 +427,7 @@ def _apply_gun_servo_env_overrides(env_cfg: Any, condition: dict[str, Any]) -> A
         gun_load_encoder=merged_dict("gun_load_encoder", "load_encoder"),
         gun_rl_action=merged_dict("gun_rl_action", "rl_action"),
         gun_rl_controller=merged_dict("gun_rl_controller", "rl_controller"),
+        gun_reward=merged_dict("gun_reward", "reward"),
         gun_safety=merged_dict("gun_safety", "safety"),
         gun_normalization=merged_dict("gun_normalization", "normalization"),
         gun_domain_randomization=domain_randomization,
@@ -467,6 +475,7 @@ def run_evaluation(
     train_cfg = parse_train_config(train_config_path)
     effective_eval_config_path = Path(eval_config_path or DEFAULT_EVAL_CONFIG_PATH)
     eval_cfg = parse_eval_config(effective_eval_config_path)
+    effective_max_steps_override = max_steps_override if max_steps_override is not None else eval_cfg.max_steps
     controller_name = normalize_controller_name(controller_name)
     if controller_name == "smc_pi_foc":
         raise NotImplementedError("smc_pi_foc is reserved for the second-round robust-control baseline.")
@@ -485,6 +494,15 @@ def run_evaluation(
         scenario_name,
     )
     env_cfg, controller_apply_dr = _apply_controller_env_overrides(env_cfg, controller_name)
+    raw_eval_cfg = load_yaml(effective_eval_config_path)
+    if isinstance(raw_eval_cfg, dict) and "apply_domain_randomization" in raw_eval_cfg:
+        controller_apply_dr = bool(raw_eval_cfg.get("apply_domain_randomization"))
+    if effective_max_steps_override is not None and str(getattr(env_cfg, "env_id", "")) == GUN_SERVO_ENV_ID:
+        env_cfg = replace(
+            env_cfg,
+            gun_servo_env={**dict(getattr(env_cfg, "gun_servo_env", {}) or {}), "episode_steps": int(effective_max_steps_override)},
+            gun_environment={**dict(getattr(env_cfg, "gun_environment", {}) or {}), "episode_steps": int(effective_max_steps_override)},
+        )
     pi_cfg = parse_pi_config(pi_config_path)
     eval_seed = int(seed_override if seed_override is not None else env_cfg.seed)
     set_seed(eval_seed)
@@ -497,13 +515,17 @@ def run_evaluation(
     default_eval_steps = getattr(train_cfg, "max_steps_per_episode", None)
     if default_eval_steps is None:
         default_eval_steps = getattr(getattr(env_cfg, "environment", None), "episode_steps", 500)
-    max_steps = int(max_steps_override if max_steps_override is not None else default_eval_steps)
+    max_steps = int(effective_max_steps_override if effective_max_steps_override is not None else default_eval_steps)
     scenario = str(scenario_name).strip() if scenario_name not in (None, "") else DEFAULT_SCENARIO_NAME
 
     obs, _info = env.reset(seed=eval_seed)
     spec = build_observation_spec(env_id=env_cfg.env_id, env=env)
     signal_fieldnames = list(parse_flat_observation(obs, spec=spec).keys())
     base_env = getattr(env, "unwrapped", env)
+    residual_mode = is_residual_controller(controller_name)
+    actor_mode = is_rl_actor_controller(controller_name)
+    if residual_mode:
+        apply_residual_action_scale_from_env(residual_settings, base_env)
     reward_term_names = list(getattr(base_env, "reward_term_names", []))
     reward_mode_name = getattr(base_env, "reward_mode", "")
     action_smoothness_enabled = bool(getattr(base_env, "action_smoothness_enabled", False))
@@ -520,8 +542,6 @@ def run_evaluation(
     if missing_trace_columns:
         raise KeyError(f"Evaluation export is missing required trace columns: {missing_trace_columns}")
 
-    residual_mode = is_residual_controller(controller_name)
-    actor_mode = is_rl_actor_controller(controller_name)
     if actor_mode or residual_mode:
         resolved_checkpoint = checkpoint_path or _default_checkpoint_path(train_cfg, tag=checkpoint_tag)
         _apply_checkpoint_hparams(train_cfg, resolved_checkpoint)
@@ -535,7 +555,10 @@ def run_evaluation(
         agent.load_checkpoint(resolved_checkpoint)
 
         if residual_mode:
-            pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
+            if spec.layout == "gun_servo_position":
+                pi = _make_cascade_servo_controller(spec=spec, env=env)
+            else:
+                pi = _make_pi_controller(act_dim=act_dim, spec=spec, pi_cfg=pi_cfg, env_cfg=env_cfg)
 
             def policy_fn(policy_obs: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
                 action_pi = pi.compute_action(policy_obs)
@@ -652,6 +675,23 @@ def run_evaluation(
             "action_raw",
             "action_safe",
             "disturbance_torque_Nm",
+            "disturbance_step_Nm",
+            "disturbance_step_time_s",
+            "domain_randomization_active",
+            "encoder_noise_std_rad",
+            "active_J_load",
+            "active_B_load",
+            "active_coulomb_friction",
+            "active_gravity_torque_coeff",
+            "gear_efficiency",
+            "sampled_theta_initial_deg",
+            "sampled_theta_final_deg",
+            "sampled_step_time_s",
+            "sampled_max_speed_deg_s",
+            "sampled_max_accel_deg_s2",
+            "sampled_sine_amplitude_deg",
+            "sampled_sine_frequency_hz",
+            "sampled_sine_phase_rad",
             "sigma_safe",
             "flag_U_safe",
             "flag_E_safe",
@@ -831,6 +871,23 @@ def run_evaluation(
                         "action_raw",
                         "action_safe",
                         "disturbance_torque_Nm",
+                        "disturbance_step_Nm",
+                        "disturbance_step_time_s",
+                        "domain_randomization_active",
+                        "encoder_noise_std_rad",
+                        "active_J_load",
+                        "active_B_load",
+                        "active_coulomb_friction",
+                        "active_gravity_torque_coeff",
+                        "gear_efficiency",
+                        "sampled_theta_initial_deg",
+                        "sampled_theta_final_deg",
+                        "sampled_step_time_s",
+                        "sampled_max_speed_deg_s",
+                        "sampled_max_accel_deg_s2",
+                        "sampled_sine_amplitude_deg",
+                        "sampled_sine_frequency_hz",
+                        "sampled_sine_phase_rad",
                     ):
                         value = _safe_float(_info.get(key))
                         if value is not None:
@@ -889,6 +946,38 @@ def run_evaluation(
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    raw_eval_cfg = load_yaml(args.eval_config)
+    configured_scenarios = raw_eval_cfg.get("scenarios", [])
+    if args.scenario in (None, "") and args.output_csv is None and isinstance(configured_scenarios, list) and configured_scenarios:
+        run_name = str(raw_eval_cfg.get("run_name", "eval"))
+        train_config_path = Path(raw_eval_cfg.get("train_config", args.train_config))
+        eval_dir = ROOT / "outputs" / "runs" / run_name / "eval"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        for scenario in configured_scenarios:
+            scenario_name = str(scenario.get("id", scenario.get("name"))) if isinstance(scenario, dict) else str(scenario)
+            output_csv = eval_dir / f"{scenario_name}_{args.controller}.csv"
+            result = run_evaluation(
+                env_config_path=args.env_config,
+                eval_config_path=args.eval_config,
+                train_config_path=train_config_path,
+                pi_config_path=args.pi_config,
+                controller_name=str(args.controller),
+                checkpoint_path=args.checkpoint,
+                checkpoint_tag=str(args.checkpoint_tag),
+                max_steps_override=args.max_steps,
+                output_csv_path=output_csv,
+                seed_override=args.seed,
+                scenario_name=scenario_name,
+                residual_scale_override=args.residual_scale,
+                residual_action_clip_override=args.residual_action_clip,
+                residual_zero_test_override=True if args.residual_zero_test else None,
+            )
+            print(
+                f"controller={result['controller']} env_id={result['env_id']} "
+                f"scenario={result['scenario']} episode_return={result['episode_return']:.3f} "
+                f"steps={result['steps']} done_reason={result['done_reason']} csv={result['output_csv']}"
+            )
+        return
     result = run_evaluation(
         env_config_path=args.env_config,
         eval_config_path=args.eval_config,

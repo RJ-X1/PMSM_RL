@@ -384,6 +384,8 @@ class TrainConfig:
     algo: str = "ddpg"
     run_name: str = "_old_ddpg_pmsm_cc"
     output_dir: str = "outputs"
+    train_scenario: str | None = None
+    train_scenarios: tuple[str, ...] = field(default_factory=tuple)
     device: str = "cpu"
     seed: int | None = None
     gamma: float = 0.99
@@ -396,6 +398,7 @@ class TrainConfig:
     warmup_steps: int = 2_000
     update_after: int = 0
     total_steps: int | None = None
+    initial_checkpoint: str | None = None
     max_episodes: int | None = 50
     max_steps_per_episode: int | None = None
     hidden_dim: int = 256
@@ -416,6 +419,10 @@ class TrainConfig:
     residual_scale: float = 0.2
     residual_action_clip: float | None = 0.3
     residual_zero_test: bool = False
+    residual_baseline_controller: str = "pi"
+    residual_baseline_weight: float = 1.0
+    residual_weight: float = 1.0
+    residual_action_scale_deg_s: float | None = None
     log_every_steps: int = 100
     save_every_steps: int | None = None
     save_every_episodes: int | None = 25
@@ -433,6 +440,10 @@ class EvalConfig:
     residual_scale: float = 0.2
     residual_action_clip: float | None = 0.3
     residual_zero_test: bool = False
+    residual_baseline_controller: str = "pi"
+    residual_baseline_weight: float = 1.0
+    residual_weight: float = 1.0
+    residual_action_scale_deg_s: float | None = None
     max_steps: int | None = None
     seed: int | None = None
     num_repeats: int = 3
@@ -741,6 +752,10 @@ def _parse_residual_control_fields(data: dict[str, Any], defaults: Any) -> dict[
         "residual_action_clip",
         data.get("residual_action_clip", defaults.residual_action_clip),
     )
+    residual_action_scale_deg_s = section.get(
+        "residual_action_scale_deg_s",
+        data.get("residual_action_scale_deg_s", defaults.residual_action_scale_deg_s),
+    )
     return {
         "controller_mode": None if controller_mode in (None, "") else str(controller_mode).strip().lower(),
         "residual_scale": float(
@@ -751,6 +766,22 @@ def _parse_residual_control_fields(data: dict[str, Any], defaults: Any) -> dict[
         ),
         "residual_zero_test": bool(
             section.get("residual_zero_test", data.get("residual_zero_test", defaults.residual_zero_test))
+        ),
+        "residual_baseline_controller": str(
+            section.get(
+                "baseline_controller",
+                data.get("residual_baseline_controller", defaults.residual_baseline_controller),
+            )
+        ),
+        "residual_baseline_weight": float(
+            section.get(
+                "baseline_weight",
+                data.get("residual_baseline_weight", defaults.residual_baseline_weight),
+            )
+        ),
+        "residual_weight": float(section.get("residual_weight", data.get("residual_weight", defaults.residual_weight))),
+        "residual_action_scale_deg_s": (
+            None if residual_action_scale_deg_s in (None, "") else float(residual_action_scale_deg_s)
         ),
     }
 
@@ -780,14 +811,20 @@ def _parse_pi_config(data: dict[str, Any]) -> PIConfig:
 
 def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
     defaults = TrainConfig()
+    algo_value = data.get("algo", data.get("algorithm", defaults.algo))
+    replay_capacity_value = data.get("replay_capacity", data.get("replay_size", defaults.replay_capacity))
+    max_steps_per_episode_value = data.get(
+        "max_steps_per_episode",
+        data.get("max_episode_steps", defaults.max_steps_per_episode),
+    )
+    eval_every_steps_value = data.get("eval_every_steps", data.get("eval_interval", defaults.eval_every_steps))
+    save_every_steps_value = data.get("save_every_steps", data.get("save_interval", defaults.save_every_steps))
+    warmup_steps_value = data.get("warmup_steps", data.get("start_steps", defaults.warmup_steps))
     tau_value = data.get("tau")
     polyak_value = data.get("polyak")
     total_steps_value = data.get("total_steps", defaults.total_steps)
     max_episodes_value = data.get("max_episodes", defaults.max_episodes)
-    max_steps_per_episode_value = data.get("max_steps_per_episode", defaults.max_steps_per_episode)
-    eval_every_steps_value = data.get("eval_every_steps", defaults.eval_every_steps)
     eval_every_episodes_value = data.get("eval_every_episodes", defaults.eval_every_episodes)
-    save_every_steps_value = data.get("save_every_steps", defaults.save_every_steps)
     save_every_episodes_value = data.get("save_every_episodes", defaults.save_every_episodes)
     exploration_noise_final_value = data.get("exploration_noise_final", defaults.exploration_noise_final)
     exploration_noise_decay_steps_value = data.get(
@@ -798,23 +835,32 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         tau_value = 1.0 - float(polyak_value)
     train_reward = _parse_train_reward_config(data)
     residual_fields = _parse_residual_control_fields(data, defaults)
+    train_scenarios_value = data.get("train_scenarios", data.get("training_scenarios", defaults.train_scenarios))
 
     return TrainConfig(
-        algo=str(data.get("algo", defaults.algo)).lower(),
+        algo=str(algo_value).lower(),
         run_name=str(data.get("run_name", defaults.run_name)),
         output_dir=str(data.get("output_dir", defaults.output_dir)),
+        train_scenario=(
+            None if data.get("train_scenario", defaults.train_scenario) in (None, "")
+            else str(data.get("train_scenario"))
+        ),
+        train_scenarios=_as_string_tuple(train_scenarios_value, default=defaults.train_scenarios),
         device=str(data.get("device", defaults.device)),
         seed=None if data.get("seed", defaults.seed) is None else int(data.get("seed", defaults.seed)),
         gamma=float(data.get("gamma", defaults.gamma)),
         tau=float(tau_value if tau_value is not None else defaults.tau),
         polyak=None if polyak_value is None else float(polyak_value),
-        lr_actor=float(data.get("lr_actor", defaults.lr_actor)),
-        lr_critic=float(data.get("lr_critic", defaults.lr_critic)),
-        replay_capacity=int(data.get("replay_capacity", defaults.replay_capacity)),
+        lr_actor=float(data.get("lr_actor", data.get("actor_lr", defaults.lr_actor))),
+        lr_critic=float(data.get("lr_critic", data.get("critic_lr", defaults.lr_critic))),
+        replay_capacity=int(replay_capacity_value),
         batch_size=int(data.get("batch_size", defaults.batch_size)),
-        warmup_steps=int(data.get("warmup_steps", defaults.warmup_steps)),
+        warmup_steps=int(warmup_steps_value),
         update_after=int(data.get("update_after", defaults.update_after)),
         total_steps=None if total_steps_value is None else int(total_steps_value),
+        initial_checkpoint=(
+            None if data.get("initial_checkpoint", None) in (None, "") else str(data.get("initial_checkpoint"))
+        ),
         max_episodes=None if max_episodes_value is None else int(max_episodes_value),
         max_steps_per_episode=None if max_steps_per_episode_value is None else int(max_steps_per_episode_value),
         hidden_dim=int(data.get("hidden_dim", defaults.hidden_dim)),
@@ -825,8 +871,8 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         exploration_noise_decay_steps=(
             None if exploration_noise_decay_steps_value is None else int(exploration_noise_decay_steps_value)
         ),
-        target_policy_noise=float(data.get("target_policy_noise", defaults.target_policy_noise)),
-        target_noise_clip=float(data.get("target_noise_clip", defaults.target_noise_clip)),
+        target_policy_noise=float(data.get("target_policy_noise", data.get("policy_noise", defaults.target_policy_noise))),
+        target_noise_clip=float(data.get("target_noise_clip", data.get("noise_clip", defaults.target_noise_clip))),
         policy_delay=int(data.get("policy_delay", defaults.policy_delay)),
         eval_every_steps=None if eval_every_steps_value is None else int(eval_every_steps_value),
         eval_every_episodes=None if eval_every_episodes_value is None else int(eval_every_episodes_value),
@@ -841,6 +887,10 @@ def _parse_train_config(data: dict[str, Any]) -> TrainConfig:
         residual_scale=residual_fields["residual_scale"],
         residual_action_clip=residual_fields["residual_action_clip"],
         residual_zero_test=residual_fields["residual_zero_test"],
+        residual_baseline_controller=residual_fields["residual_baseline_controller"],
+        residual_baseline_weight=residual_fields["residual_baseline_weight"],
+        residual_weight=residual_fields["residual_weight"],
+        residual_action_scale_deg_s=residual_fields["residual_action_scale_deg_s"],
         log_every_steps=int(data.get("log_every_steps", defaults.log_every_steps)),
         save_every_steps=None if save_every_steps_value is None else int(save_every_steps_value),
         save_every_episodes=None if save_every_episodes_value is None else int(save_every_episodes_value),
@@ -864,6 +914,10 @@ def _parse_eval_config(data: dict[str, Any]) -> EvalConfig:
         residual_scale=residual_fields["residual_scale"],
         residual_action_clip=residual_fields["residual_action_clip"],
         residual_zero_test=residual_fields["residual_zero_test"],
+        residual_baseline_controller=residual_fields["residual_baseline_controller"],
+        residual_baseline_weight=residual_fields["residual_baseline_weight"],
+        residual_weight=residual_fields["residual_weight"],
+        residual_action_scale_deg_s=residual_fields["residual_action_scale_deg_s"],
         max_steps=None if max_steps_value is None else int(max_steps_value),
         seed=None if seed_value is None else int(seed_value),
         num_repeats=int(data.get("num_repeats", defaults.num_repeats)),

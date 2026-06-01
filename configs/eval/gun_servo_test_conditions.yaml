@@ -27,6 +27,722 @@ test_scenarios:
     domain_randomization:
       enabled: false
 
+  - id: C1_mixed_5_10deg_step_sc_residual_td3_v5
+    name: SC-residual TD3 v5 mixed 5 to 10 deg training step
+    episode_time_s: 5.0
+    reference:
+      profile: random_step
+      theta_range_deg: [0.0, 10.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      action_rate_weight: 0.02
+      residual_action_weight: 0.01
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_margin_weight: 2.0
+      command_speed_margin_weight: 0.75
+      speed_limit_soft_ratio: 0.85
+      safety_flag_u_weight: 0.15
+      safety_flag_e_weight: 0.2
+      command_saturation_weight: 0.3
+      w_saturation: 0.3
+      unsafe_done_weight: 100.0
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_5deg_sc_residual_td3_v5
+    name: SC-residual TD3 v5 5 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 5.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      action_rate_weight: 0.02
+      residual_action_weight: 0.01
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_margin_weight: 2.0
+      command_speed_margin_weight: 0.75
+      speed_limit_soft_ratio: 0.85
+      safety_flag_u_weight: 0.15
+      safety_flag_e_weight: 0.2
+      command_saturation_weight: 0.3
+      w_saturation: 0.3
+      unsafe_done_weight: 100.0
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_sc_residual_td3_v5
+    name: SC-residual TD3 v5 10 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      action_rate_weight: 0.02
+      residual_action_weight: 0.01
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_margin_weight: 2.0
+      command_speed_margin_weight: 0.75
+      speed_limit_soft_ratio: 0.85
+      safety_flag_u_weight: 0.15
+      safety_flag_e_weight: 0.2
+      command_saturation_weight: 0.3
+      w_saturation: 0.3
+      unsafe_done_weight: 100.0
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_sc_residual_td3_v5
+    name: SC-residual TD3 v5 speed-limited 20 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      action_rate_weight: 0.02
+      residual_action_weight: 0.01
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_margin_weight: 2.0
+      command_speed_margin_weight: 0.75
+      speed_limit_soft_ratio: 0.85
+      safety_flag_u_weight: 0.15
+      safety_flag_e_weight: 0.2
+      command_saturation_weight: 0.3
+      w_saturation: 0.3
+      unsafe_done_weight: 100.0
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: trapezoid_15deg_sc_residual_td3_v5
+    name: SC-residual TD3 v5 trapezoid 15 deg
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      action_rate_weight: 0.02
+      residual_action_weight: 0.01
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_margin_weight: 2.0
+      command_speed_margin_weight: 0.75
+      speed_limit_soft_ratio: 0.85
+      safety_flag_u_weight: 0.15
+      safety_flag_e_weight: 0.2
+      command_saturation_weight: 0.3
+      w_saturation: 0.3
+      unsafe_done_weight: 100.0
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: C1_mixed_5_10deg_step_sc_residual_td3_v51
+    name: SC-residual TD3 v5.1 mixed 5 to 10 deg training step
+    reference:
+      profile: random_step
+      theta_range_deg: [0.0, 10.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_5deg_sc_residual_td3_v51
+    name: SC-residual TD3 v5.1 5 deg step
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 5.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_sc_residual_td3_v51
+    name: SC-residual TD3 v5.1 10 deg step
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_sc_residual_td3_v51
+    name: SC-residual TD3 v5.1 speed-limited 20 deg step
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: trapezoid_15deg_sc_residual_td3_v51
+    name: SC-residual TD3 v5.1 trapezoid 15 deg
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: C1_mixed_5_10deg_step_residual_td3_v4
+    name: Residual TD3 v4 mixed 5 to 10 deg training step
+    episode_time_s: 5.0
+    reference:
+      profile: random_step
+      theta_range_deg: [0.0, 10.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.005
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_5deg_residual_td3_v4
+    name: Residual TD3 v4 5 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 5.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.005
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_residual_td3_v4
+    name: Residual TD3 v4 10 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.005
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_residual_td3_v4
+    name: Residual TD3 v4 speed-limited 20 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.005
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: trapezoid_15deg_residual_td3_v4
+    name: Residual TD3 v4 trapezoid 15 deg
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 30.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 600.0
+      omega_cmd_accel_limit_deg_s2: 150.0
+      command_smoothing_time_s: 0.0
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.005
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_pid_v2
+    name: Step 10 deg conservative PID
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_5deg_td3_smoke_v2
+    name: TD3 smoke v2 5 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 5.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 5.0
+      omega_limit_deg_s: 25.0
+      delta_omega_rate_limit_deg_s2: 120.0
+      omega_cmd_accel_limit_deg_s2: 80.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 2.0
+      w_omega: 2.0
+      w_action: 0.20
+      w_torque: 0.02
+      w_safety: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_td3_smoke_v2
+    name: TD3 smoke v2 10 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 5.0
+      omega_limit_deg_s: 25.0
+      delta_omega_rate_limit_deg_s2: 120.0
+      omega_cmd_accel_limit_deg_s2: 80.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 2.0
+      w_omega: 2.0
+      w_action: 0.20
+      w_torque: 0.02
+      w_safety: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_pid_v2
+    name: Speed-limited 20 deg step conservative PID
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_aggressive
+    name: Aggressive 20 deg step
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 20.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_td3_smoke_v2
+    name: TD3 smoke v2 speed-limited 20 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 5.0
+      omega_limit_deg_s: 25.0
+      delta_omega_rate_limit_deg_s2: 120.0
+      omega_cmd_accel_limit_deg_s2: 80.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 2.0
+      w_omega: 2.0
+      w_action: 0.20
+      w_torque: 0.02
+      w_safety: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
   - id: trapezoid_15deg
     name: Trapezoid 15 deg
     reference:
@@ -57,6 +773,96 @@ test_scenarios:
     domain_randomization:
       enabled: false
 
+  - id: trapezoid_15deg_pid_v2
+    name: Trapezoid 15 deg conservative PID
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: trapezoid_15deg_td3_smoke_v2
+    name: TD3 smoke v2 trapezoid 15 deg
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 3.0
+      omega_limit_deg_s: 25.0
+      delta_omega_rate_limit_deg_s2: 120.0
+      omega_cmd_accel_limit_deg_s2: 80.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 2.0
+      w_omega: 2.0
+      w_action: 0.20
+      w_torque: 0.02
+      w_safety: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.8
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: sine_tracking_safe_pid_v2
+    name: Safe sine 5 deg 0.1 Hz conservative PID
+    reference:
+      profile: sinusoidal
+      theta_range_deg: [-5.0, 5.0]
+      sine_frequency_hz: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: sine_tracking_aggressive
+    name: Aggressive sine 10 deg 0.5 Hz
+    reference:
+      profile: sinusoidal
+      theta_range_deg: [-10.0, 10.0]
+      sine_frequency_hz: 0.5
+      randomize_on_reset: false
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
   - id: disturbance_step
     name: 150 Nm load disturbance rejection
     reference:
@@ -68,6 +874,26 @@ test_scenarios:
       disturbance_torque_nm: 0.0
       disturbance_step_nm: 150.0
       disturbance_step_time_s: 0.5
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: disturbance_after_settling_pid_v2
+    name: 150 Nm disturbance after settling conservative PID
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      baseline_pid:
+        kp: 8.0
+        ki: 0.0
+        kd: 2.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 150.0
+      disturbance_step_time_s: 2.5
       disturbance_noise_std_nm: 0.0
     domain_randomization:
       enabled: false
@@ -92,3 +918,293 @@ test_scenarios:
       encoder_noise_rad_range: [0.0, 2.0e-5]
       gear_efficiency_range: [0.60, 0.80]
       vdc_scale_range: [0.85, 1.10]
+
+  - id: random_step_safe_v8
+    name: v8 randomized safe step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 20.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 20.0]
+      step_time_s: 0.2
+      step_time_s_range: [0.1, 0.5]
+      randomize_on_reset: true
+    rl_controller:
+      omega_limit_deg_s: 25.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: true
+
+  - id: random_trapezoid_safe_v8
+    name: v8 randomized safe trapezoid
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 20.0]
+      max_speed_deg_s: 18.0
+      max_speed_deg_s_range: [10.0, 25.0]
+      max_accel_deg_s2: 100.0
+      max_accel_deg_s2_range: [50.0, 150.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    rl_controller:
+      omega_limit_deg_s: 25.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: true
+
+  - id: random_sine_safe_v8
+    name: v8 randomized safe sine
+    episode_time_s: 5.0
+    reference:
+      profile: sinusoidal
+      theta_range_deg: [-8.0, 8.0]
+      sine_amplitude_deg_range: [3.0, 8.0]
+      sine_frequency_hz: 0.06
+      sine_frequency_hz_range: [0.03, 0.10]
+      sine_phase_range_rad: [0.0, 6.283185307179586]
+      randomize_on_reset: true
+    rl_controller:
+      omega_limit_deg_s: 25.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: true
+
+  - id: random_disturbance_after_settling_v8
+    name: v8 randomized disturbance after settling
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 15.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 15.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    rl_controller:
+      omega_limit_deg_s: 25.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 150.0
+      disturbance_step_nm_range: [100.0, 300.0]
+      disturbance_step_time_s: 2.5
+      disturbance_step_time_s_range: [2.0, 3.5]
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: true
+
+  - id: C1_mixed_5_10deg_step_td3_smoke_v3
+    name: TD3 smoke v3 mixed 5 to 10 deg training step
+    episode_time_s: 5.0
+    reference:
+      profile: random_step
+      theta_range_deg: [0.0, 10.0]
+      theta_initial_range_deg: [0.0, 0.0]
+      theta_final_range_deg: [5.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: true
+    rl_controller:
+      delta_omega_limit_deg_s: 15.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 240.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.85
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_5deg_td3_smoke_v3
+    name: TD3 smoke v3 5 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 5.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 15.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 240.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.85
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_10deg_td3_smoke_v3
+    name: TD3 smoke v3 10 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: step
+      theta_range_deg: [0.0, 10.0]
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 15.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 240.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.85
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: step_20deg_speed_limited_td3_smoke_v3
+    name: TD3 smoke v3 speed-limited 20 deg step
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [0.0, 20.0]
+      max_speed_deg_s: 10.0
+      max_accel_deg_s2: 50.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 15.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 240.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.85
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false
+
+  - id: trapezoid_15deg_td3_smoke_v3
+    name: TD3 smoke v3 trapezoid 15 deg
+    episode_time_s: 5.0
+    reference:
+      profile: trapezoid
+      theta_range_deg: [-15.0, 15.0]
+      max_speed_deg_s: 25.0
+      max_accel_deg_s2: 120.0
+      step_time_s: 0.1
+      randomize_on_reset: false
+    rl_controller:
+      delta_omega_limit_deg_s: 15.0
+      omega_limit_deg_s: 30.0
+      delta_omega_rate_limit_deg_s2: 240.0
+      omega_cmd_accel_limit_deg_s2: 120.0
+      command_smoothing_time_s: 0.0
+    reward:
+      mode: quadratic_tracking
+      w_theta: 8.0
+      w_omega: 0.05
+      w_action: 0.02
+      w_torque: 0.02
+      w_safety: 100.0
+      w_progress: 3.0
+      w_speed_limit: 2.0
+      speed_limit_soft_ratio: 0.85
+      w_saturation: 0.2
+      w_terminal: 100.0
+    safety:
+      enable_u_safe: true
+      enable_e_safe: true
+      enable_x_safe: true
+      lambda_smooth: 0.85
+      safety_penalty: 100.0
+    load:
+      disturbance_torque_nm: 0.0
+      disturbance_step_nm: 0.0
+      disturbance_noise_std_nm: 0.0
+    domain_randomization:
+      enabled: false

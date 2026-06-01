@@ -1,0 +1,32 @@
+controller: rl
+run_name: gun_servo_td3_smoke_v3_c1
+task_name: gun_servo_position
+env_config: configs/env/gun_servo_position_td3_smoke_v3.yaml
+train_config: configs/train/gun_servo_td3_smoke_v3.yaml
+test_conditions: configs/eval/gun_servo_test_conditions.yaml
+test_conditions_path: configs/eval/gun_servo_test_conditions.yaml
+pid_baseline_summary: outputs/runs/gun_servo_pid_smoke_v2/summaries/pid_smoke_summary.csv
+td3_baseline_summary: outputs/runs/gun_servo_td3_smoke_v2_c1/summaries/td3_v2_smoke_summary.csv
+td3_baseline_controller_label: td3_v2
+max_steps: 5000
+seed: 0
+num_repeats: 1
+save_csv: true
+save_summary: true
+save_figures: true
+comparison_output_name: td3_v3_vs_pid_v2_summary.csv
+td3_comparison_output_name: td3_v3_vs_td3_v2_summary.csv
+summary_output_name: td3_v3_smoke_summary.csv
+td3_controller_label: td3_v3
+
+scenarios:
+  - C1a_5deg_step
+  - C1_10deg_step
+  - C2a_20deg_step_safe
+  - C3_trapezoid_tracking
+
+scenario_condition_map:
+  C1a_5deg_step: step_5deg_td3_smoke_v3
+  C1_10deg_step: step_10deg_td3_smoke_v3
+  C2a_20deg_step_safe: step_20deg_speed_limited_td3_smoke_v3
+  C3_trapezoid_tracking: trapezoid_15deg_td3_smoke_v3
